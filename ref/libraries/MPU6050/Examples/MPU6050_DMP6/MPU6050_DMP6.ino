@@ -245,7 +245,7 @@ void loop() {
     if (!dmpReady) return;
 
     // wait for MPU interrupt or extra packet(s) available
-    while (!mpuInterrupt && fifoCount < packetSize) {
+//    while (!mpuInterrupt && fifoCount < packetSize) {
         // other program behavior stuff here
         // .
         // .
@@ -256,7 +256,7 @@ void loop() {
         // .
         // .
         // .
-    }
+//    }
 
     // reset interrupt flag and get INT_STATUS byte
     mpuInterrupt = false;
@@ -278,7 +278,7 @@ void loop() {
 
         // read a packet from FIFO
         mpu.getFIFOBytes(fifoBuffer, packetSize);
-        
+
         // track FIFO count here in case there is > 1 packet available
         // (this lets us immediately read more without waiting for an interrupt)
         fifoCount -= packetSize;
@@ -350,7 +350,7 @@ void loop() {
             Serial.print("\t");
             Serial.println(aaWorld.z);
         #endif
-    
+
         #ifdef OUTPUT_TEAPOT
             // display quaternion values in InvenSense Teapot demo format:
             teapotPacket[2] = fifoBuffer[0];
