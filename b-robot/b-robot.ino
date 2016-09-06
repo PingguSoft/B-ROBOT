@@ -89,6 +89,8 @@
 
 #define CLK_PERIOD              2000000
 
+#define MOTOR_TEST              0
+
 /*
 *****************************************************************************************
 * MACROS
@@ -105,6 +107,8 @@
 * VARIABLES
 *****************************************************************************************
 */
+volatile u32 mMillis = 0;
+
 bool        mIsShutdown = false; // Robot shutdown flag => Out of
 
 // MPU control/status vars
@@ -120,11 +124,11 @@ u8          mLoop40Hz;              // To generate a medium loop 40Hz
 u8          mLoop2Hz;               // slow loop 2Hz
 u8          mBattCtr;               // To send battery status
 
-long        mOldTime;
-long        mCurTime;
+u32         mOldTime;
+u32         mCurTime;
 int         mDebugCtr;
 float       mDebugVar;
-float       mTimeDiff;
+
 
 // class default I2C address is 0x68 for MPU6050
 MPU6050     mMPU;
@@ -208,7 +212,7 @@ float getStabilityPDControlOutput(float DT, float input, float setPoint,  float 
     //    The biggest one using only the input (sensor) part not the SetPoint input-input(t-2)
     //    And the second using the setpoint to make it a bit more agressive   setPoint-setPoint(t-1)
     output = p * error + (d * (setPoint - mSetPointOld) - d * (input - mPIDErrOld2)) / DT;
-    //Serial.print(Kd*(error-mPIDErrOld));Serial.print("\t");
+    //Serial.print(d*(error-mPIDErrOld));Serial.print("\t");
     mPIDErrOld2 = mPIDErrOld;
     mPIDErrOld = input;  // error for Kd is only the input component
     mSetPointOld = setPoint;
@@ -324,6 +328,16 @@ trigger:
     }
 }
 
+ISR(TIMER1_COMPA_vect)
+{
+    mMillis++;
+}
+
+u32 getMillis()
+{
+    return mMillis;
+}
+
 // tspeed could be positive or negative (reverse)
 void setMotorSpeed(s8 mot, s16 tspeed)
 {
@@ -399,6 +413,13 @@ void setMotorSpeed(s8 mot, s16 tspeed)
 
 void setup()
 {
+    // 1ms counter => TIMER1
+    TCCR1A = 0;                                 // Timer1 CTC mode 4, OCxA,B outputs disconnected
+    TCCR1B = BV(WGM12) | BV(CS11) | BV(CS10);   // Prescaler=64, => 250Khz
+    OCR1A  = 250;
+    TCNT1  = 0;
+    TIMSK1 |= BV(OCIE1A);                       // Enable Timer1 interrupt
+
     pinMode(PIN_MOT_ENABLE, OUTPUT);
     pinMode(PIN_MOT_L_STEP, OUTPUT);
     pinMode(PIN_MOT_L_DIR, OUTPUT);
@@ -419,8 +440,8 @@ void setup()
     delay(200);
 
 #if 1
-    Serial.println("BROBOT by JJROBOTS v2.2");
-    Serial.println("Initializing I2C devices...");
+    LOG(F("---- BROBOT ---- \n"));
+    LOG(F("Initializing I2C devices...\n"));
 
     mMPU.setClockSource(MPU6050_CLOCK_PLL_ZGYRO);
     mMPU.setFullScaleGyroRange(MPU6050_GYRO_FS_2000);
@@ -430,11 +451,11 @@ void setup()
     mMPU.setSleepEnabled(false);
     delay(500);
 
-    Serial.println("Initializing DMP...");
+    LOG(F("Initializing DMP...\n"));
     mDevStatus = mMPU.dmpInitialize();
     if (mDevStatus == 0) {
         // turn on the DMP, now that it's ready
-        Serial.println("Enabling DMP...");
+        LOG(F("Enabling DMP...\n"));
         mMPU.setDMPEnabled(true);
         mMpuIntStatus = mMPU.getIntStatus();
         mIsDMPReady = true;
@@ -442,39 +463,40 @@ void setup()
         // 1 = initial memory load failed
         // 2 = DMP configuration updates failed
         // (if it's going to break, usually the code will be 1)
-        Serial.print("DMP Initialization failed (code ");
-        Serial.print(mDevStatus);
-        Serial.println(")");
+        LOG(F("DMP Initialization failed (code : %d)\n"), mDevStatus);
     }
 
     // Gyro calibration
     // The robot must be steady during initialization
-    delay(500);
-    Serial.println("Gyro calibration!!  Dont move the robot in 10 seconds... ");
-    delay(500);
+    LOG(F("Gyro calibration!!  Dont move the robot in 10 seconds...\n"));
 
-    delay(10000);   // Time to settle things... the bias_from_no_motion algorithm needs some time to take effect and reset gyro bias.
+    // Time to settle things... the bias_from_no_motion algorithm needs some time to take effect and reset gyro bias.
+    delay(10000);
 
     // Verify connection
-    Serial.println("Testing device connections...");
-    Serial.println(mMPU.testConnection() ? "MPU6050 connection successful" : "MPU6050 connection failed");
-    mOldTime = millis();
+    LOG(F("Testing device connections...\n"));
+    if (mMPU.testConnection())
+        LOG(F("MPU6050 connection successful\n"));
+    else
+        LOG(F("MPU6050 connection failed\n"));
+
 
     //Adjust sensor fusion gain
-    Serial.println("Adjusting DMP sensor fusion gain...");
+    LOG(F("Adjusting DMP sensor fusion gain...\n"));
     setSensorFusionAccelGain(0x20);
     delay(200);
 
     // Init servos
-    Serial.println("Servo initialization...");
+    LOG(F("Servo initialization...\n"));
 #endif
 
     // STEPPER MOTORS INITIALIZATION
-    Serial.println("Steper motors initialization...");
+    LOG(F("Steper motors initialization...\n"));
+
     // MOTOR1 => TIMER0
     TCCR0A = 0;                                 // Timer0 CTC mMode 2, OCxA,B outputs disconnected
     TCCR0B = BV(WGM01) | BV(CS01);              // Prescaler=8, => 2MHz
-    OCR1A = ZERO_SPEED;                         // Motor stopped
+    OCR0A = ZERO_SPEED;                         // Motor stopped
     mDirs[MOT_1] = 0;
     TCNT0 = 0;
 
@@ -500,24 +522,58 @@ void setup()
         delay(200);
     }
 
-    Serial.println("Let's start...");
+    LOG(F("Let's start...\n"));
     mMPU.resetFIFO();
-    mOldTime = millis();
+    mOldTime = getMillis() - 1;
     mIsShutdown = false;
     mMode = 0;
 }
 
 
-s16 mMotSpd = 0;
+s16 mMotSpd[2];
 
 void loop()
 {
+    float       delta;
+
 #if SHUTDOWN_WHEN__OFF==1
     if (mIsShutdown)
         return;
 #endif
 
     mDebugCtr++;
+
+
+#if MOTOR_TEST
+    if (Serial.available()) {
+        u8  ch = Serial.read();
+
+        switch (ch) {
+            case '+':
+                mMotSpd[MOT_1] = constrain(mMotSpd[MOT_1] + 5, -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
+                setMotorSpeed(MOT_1, mMotSpd[MOT_1]);
+                break;
+
+            case '-':
+                mMotSpd[MOT_1] = constrain(mMotSpd[MOT_1] - 5, -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
+                setMotorSpeed(MOT_1, mMotSpd[MOT_1]);
+                break;
+
+            case 'a':
+                mMotSpd[MOT_2] = constrain(mMotSpd[MOT_2] + 5, -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
+                setMotorSpeed(MOT_2, mMotSpd[MOT_2]);
+                break;
+
+            case 'z':
+                mMotSpd[MOT_2] = constrain(mMotSpd[MOT_2] - 5, -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
+                setMotorSpeed(MOT_2, mMotSpd[MOT_2]);
+                break;
+        }
+        LOG(F("MOTOR1:%4d, MOTOR2:%4d\n"), mMotSpd[MOT_1], mMotSpd[MOT_2]);
+    }
+    return;
+#endif
+
 
 #if 0
     OSC.MsgRead();  // Read UDP OSC messages
@@ -550,28 +606,6 @@ void loop()
             }
         }
     } // End new OSC message
-#else
-
-#if 0
-    if (Serial.available()) {
-        u8  ch = Serial.read();
-
-        switch (ch) {
-            case '+':
-                mMotSpd+=5;
-                mMotSpd = constrain(mMotSpd, -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
-                setMotorSpeed(MOT_2, mMotSpd);
-                break;
-
-            case '-':
-                mMotSpd-=5;
-                mMotSpd = constrain(mMotSpd, -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
-                setMotorSpeed(MOT_2, mMotSpd);
-                break;
-        }
-    }
-#endif
-
 #endif
 
 
@@ -584,7 +618,8 @@ void loop()
 
 
 #if 1
-    mCurTime = millis();
+    mCurTime = getMillis();
+
     // New DMP Orientation solution?
     mFifoCount = mMPU.getFIFOCount();
     if (mFifoCount >= 18) {
@@ -596,7 +631,7 @@ void loop()
         }
         mLoop40Hz++;
         mLoop2Hz++;
-        mTimeDiff = (mCurTime - mOldTime);
+        delta = (mCurTime - mOldTime);
         mOldTime = mCurTime;
 
         mAngleAdjustedOld = mAngleAdjusted;
@@ -615,18 +650,18 @@ void loop()
         mEstSpeedFiltered = mEstSpeedFiltered * 0.95 + (float)estimated_speed * 0.05;  // low pass filter on estimated speed
 
         // SPEED CONTROL: This is a PI controller.
-        //    input:user mThrottle, variable: estimated robot speed, output: target robot angle to get the desired speed
-        mTargetAngle = getSpeedPIControlOutput(mTimeDiff, mEstSpeedFiltered, mThrottle, KpThr, KiThr);
+        //    input:user throttle, variable: estimated robot speed, output: target robot angle to get the desired speed
+        mTargetAngle = getSpeedPIControlOutput(delta, mEstSpeedFiltered, mThrottle, KpThr, KiThr);
         mTargetAngle = constrain(mTargetAngle, -mMaxTargetAngle, mMaxTargetAngle); // limited output
         //LOG(F("AngleAdjusted:%f, EstSpeedFiltered:%f, TargetAngle:%f\n"), mAngleAdjusted, mEstSpeedFiltered, mTargetAngle);
 
         // Stability control: This is a PD controller.
         //    input: robot target angle(from SPEED CONTROL), variable: robot angle, output: Motor speed
         //    We integrate the output (sumatory), so the output is really the motor acceleration, not motor speed.
-        mControlOutput += getStabilityPDControlOutput(mTimeDiff, mAngleAdjusted, mTargetAngle, Kp, Kd);
+        mControlOutput += getStabilityPDControlOutput(delta, mAngleAdjusted, mTargetAngle, Kp, Kd);
         mControlOutput = constrain(mControlOutput, -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT); // Limit max output from control
 
-        // The mSteering part from the user is injected directly on the output
+        // The steering part from the user is injected directly on the output
         mMotors[MOT_1] = mControlOutput + mSteering;
         mMotors[MOT_2] = mControlOutput - mSteering;
 
@@ -634,7 +669,9 @@ void loop()
         mMotors[MOT_1] = constrain(mMotors[MOT_1], -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
         mMotors[MOT_2] = constrain(mMotors[MOT_2], -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
 
-        Serial.print("AA:");
+#if 1
+        Serial.print(mCurTime);
+        Serial.print("  AA:");
         Serial.print(mAngleAdjusted);
         Serial.print(", TA:");
         Serial.print(mTargetAngle);
@@ -643,11 +680,12 @@ void loop()
         Serial.print(", CO:");
         Serial.print(mControlOutput);
         Serial.print(", DT:");
-        Serial.print(mTimeDiff);
+        Serial.print(delta);
         Serial.print(", M1:");
         Serial.print(mMotors[MOT_1]);
         Serial.print(", M2:");
         Serial.println(mMotors[MOT_2]);
+#endif
 
         // NOW we send the commands to the motors
         if ((mAngleAdjusted < 76) && (mAngleAdjusted > -76)) { // Is robot ready (upright?)
@@ -722,6 +760,7 @@ void loop()
 
     if (mLoop2Hz >= 99) { // 2Hz
         mLoop2Hz = 0;
+
 #if BATTERY_CHECK==1
         int BatteryValue = BROBOT.readBattery();
         mBattCtr++;
