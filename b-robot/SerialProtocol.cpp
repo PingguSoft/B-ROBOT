@@ -195,10 +195,11 @@ u8 SerialProtocol::read(u8 *buf)
     return size;
 }
 
-
-//
-// Utility functions for debugging
-//
+/*
+*****************************************************************************************
+* Utility functions for debugging
+*****************************************************************************************
+*/
 void SerialProtocol::printf(const __FlashStringHelper *fmt, ...)
 {
     char buf[128]; // resulting string limited to 128 chars
@@ -262,3 +263,138 @@ void SerialProtocol::dumpHex(char *name, u8 *data, u16 cnt)
     }
 }
 
+
+/*
+*****************************************************************************************
+* MSP
+*****************************************************************************************
+*/
+void SerialProtocol::registerMSPCallback(s8 (*callback)(u8 cmd, u8 *data, u8 size, u8 *res))
+{
+    mState = STATE_IDLE;
+    mCallback = callback;
+}
+
+void SerialProtocol::putMSPChar2TX(u8 data)
+{
+    mCheckSumTX ^= data;
+    putChar2TX(data);
+}
+
+void SerialProtocol::sendMSPResp(bool ok, u8 cmd, u8 *data, u8 size)
+{
+    putMSPChar2TX('$');
+    putMSPChar2TX('M');
+    putMSPChar2TX((ok ? '>' : '!'));
+    mCheckSumTX = 0;
+    putMSPChar2TX(size);
+    putMSPChar2TX(cmd);
+    for (u8 i = 0; i < size; i++)
+        putMSPChar2TX(*data++);
+    putMSPChar2TX(mCheckSumTX);
+    flushTX();
+}
+
+void SerialProtocol::evalMSPCommand(u8 cmd, u8 *data, u8 size)
+{
+    static u16 wmCycleTime = 0;
+
+    u8  buf[22];
+    u16 *rc;
+
+    memset(&buf, 0, sizeof(buf));
+
+    switch (cmd) {
+        case MSP_IDENT:
+            buf[0] = 240;
+            buf[1] = 3;
+            sendMSPResp(TRUE, cmd, buf, 7);
+            break;
+
+        case MSP_STATUS:
+            *((u16*)&buf[0]) = wmCycleTime++;
+            sendMSPResp(TRUE, cmd, buf, 11);
+            break;
+
+        case MSP_MISC:
+            rc = (u16*)buf;
+            rc[2] = 2000;
+            rc[3] = 1000;
+            rc[4] = 1000;
+            buf[18] = 100;
+            buf[19] = 110;
+            buf[20] = 105;
+            buf[21] = 100;
+            sendMSPResp(TRUE, cmd, buf, 22);
+            break;
+
+        default:
+            if (mCallback) {
+                s8 ret = (*mCallback)(cmd, data, size, buf);
+                if (ret >= 0) {
+                    sendMSPResp(TRUE, cmd, buf, ret);
+                }
+            }
+            break;
+    }
+}
+
+u8 SerialProtocol::handleMSP(void)
+{
+    u8 ret = 0;
+    u8 rxSize = available();
+
+    if (rxSize == 0)
+        return ret;
+
+    while (rxSize--) {
+        u8 ch = read();
+
+        switch (mState) {
+            case STATE_IDLE:
+                if (ch == '$')
+                    mState = STATE_HEADER_START;
+                break;
+
+            case STATE_HEADER_START:
+                mState = (ch == 'M') ? STATE_HEADER_M : STATE_IDLE;
+                break;
+
+            case STATE_HEADER_M:
+                mState = (ch == '<') ? STATE_HEADER_ARROW : STATE_IDLE;
+                break;
+
+            case STATE_HEADER_ARROW:
+                if (ch > MAX_PACKET_SIZE) { // now we are expecting the payload size
+                    mState = STATE_IDLE;
+                    continue;
+                }
+                mDataSize = ch;
+                mCheckSum = ch;
+                mOffset   = 0;
+                mState    = STATE_HEADER_SIZE;
+                break;
+
+            case STATE_HEADER_SIZE:
+                mCmd       = ch;
+                mCheckSum ^= ch;
+                mState     = STATE_HEADER_CMD;
+                break;
+
+            case STATE_HEADER_CMD:
+                if (mOffset < mDataSize) {
+                    mCheckSum           ^= ch;
+                    mRxPacket[mOffset++] = ch;
+                } else {
+                    if (mCheckSum == ch) {
+                        ret = mCmd;
+                        evalMSPCommand(ret, mRxPacket, mDataSize);
+                    }
+                    mState = STATE_IDLE;
+                    //rxSize = 0;             // no more than one command per cycle
+                }
+                break;
+        }
+    }
+    return ret;
+}

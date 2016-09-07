@@ -18,10 +18,22 @@
 #include "Common.h"
 #include <stdarg.h>
 
+#define MAX_PACKET_SIZE 64
+
 class SerialProtocol
 {
 
 public:
+    typedef enum {
+        MSP_SET_USER_BUTTON = 51,
+        MSP_IDENT  = 100,
+        MSP_STATUS = 101,
+        MSP_ANALOG = 110,
+        MSP_MISC   = 114,
+        MSP_SET_RAW_RC = 200,
+        MSP_SET_MISC   = 207,
+    } MSP_T;
+
     SerialProtocol();
     ~SerialProtocol();
 
@@ -37,8 +49,35 @@ public:
     static void printf(const __FlashStringHelper *fmt, ... );
     static void dumpHex(char *name, u8 *data, u16 cnt);
 
-private:
+    u8   handleMSP(void);
+    void registerMSPCallback(s8 (*callback)(u8 cmd, u8 *data, u8 size, u8 *res));
 
+private:
+    typedef enum
+    {
+        STATE_IDLE,
+        STATE_HEADER_START,
+        STATE_HEADER_M,
+        STATE_HEADER_ARROW,
+        STATE_HEADER_SIZE,
+        STATE_HEADER_CMD
+    } STATE_T;
+    //
+
+    // variables
+    u8   mRxPacket[MAX_PACKET_SIZE];
+
+    u8   mState;
+    u8   mOffset;
+    u8   mDataSize;
+    u8   mCheckSum;
+    u8   mCmd;
+    u8   mCheckSumTX;
+    s8  (*mCallback)(u8 cmd, u8 *data, u8 size, u8 *res);
+
+    void putMSPChar2TX(u8 data);
+    void sendMSPResp(bool ok, u8 cmd, u8 *data, u8 size);
+    void evalMSPCommand(u8 cmd, u8 *data, u8 size);
 };
 
 #endif
