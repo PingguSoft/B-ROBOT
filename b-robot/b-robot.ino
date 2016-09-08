@@ -5,38 +5,16 @@
 #include <JJ_MPU6050_DMP_6Axis.h>  // Modified version of the MPU6050 library to work with DMP (see comments inside)
 
 #include "common.h"
+#include "config.h"
 #include "utils.h"
 #include "SerialProtocol.h"
+#include "RobotAux.h"
 
 /*
 *****************************************************************************************
 * CONSTANTS
 *****************************************************************************************
 */
-
-// PINS
-#define PORT_MOT_STEP           PORTC
-#define PORT_MOT_DIR            PORTC
-
-#define PIN_MOT_ENABLE          10
-
-#define PIN_MOT_1_STEP          A0
-#define BIT_MOT_1_STEP          0
-
-#define PIN_MOT_1_DIR           A1
-#define BIT_MOT_1_DIR           1
-
-#define PIN_MOT_2_DIR           A2
-#define BIT_MOT_2_DIR           2
-
-#define PIN_MOT_2_STEP          A3
-#define BIT_MOT_2_STEP          3
-
-#define PIN_LED                 13
-
-#define PIN_ANALOG_VOLT         6       // A6
-
-
 // NORMAL MODE PARAMETERS (MAXIMUN SETTINGS)
 #define MAX_THROTTLE            580
 #define MAX_STEERING            150
@@ -92,7 +70,7 @@
 
 #define CLK_PERIOD              2000000
 
-#define MOTOR_TEST              1
+#define MOTOR_TEST              0
 
 /*
 *****************************************************************************************
@@ -116,6 +94,7 @@ bool        mIsShutdown = false; // Robot shutdown flag => Out of
 u8          mFifoBufs[18];          // FIFO storage buffer
 
 u32         mLastBattTS;
+u32         mLastSonarTS;
 u32         mLastTS;
 u32         mCurTS;
 
@@ -160,6 +139,11 @@ float       mEstSpeedFiltered;  // Estimated robot speed
 #if !__STD_SERIAL__
 SerialProtocol mSerial;
 #endif
+
+RobotAux    mRobotAux;
+u8          mLastBatt;
+
+s16         mSonarDist;
 
 // DMP FUNCTIONS
 // This function defines the weight of the accel on the sensor fusion
@@ -394,14 +378,21 @@ u8 mAuxBtn = 0;
 s8 inputCallback(u8 cmd, u8 *data, u8 size, u8 *res)
 {
     u16 *rc;
+    u32 *ptr;
     u16 val;
     s8  ret = -1;
 
     switch (cmd) {
 
         case SerialProtocol::MSP_ANALOG:
-            res[0] = 120;
+            res[0] = mLastBatt;
             ret = 7;
+            break;
+
+        case SerialProtocol::MSP_ALTITUDE:
+            ptr = (u32*)res;
+            *ptr = mRobotAux.getDist(0);
+            ret = 6;
             break;
 
         case SerialProtocol::MSP_SET_RAW_RC:
@@ -451,29 +442,6 @@ s8 inputCallback(u8 cmd, u8 *data, u8 size, u8 *res)
 }
 
 
-#define CONFIG_VBAT_SMOOTH      16
-
-u16 mVoltBuf[CONFIG_VBAT_SMOOTH];
-u16 mVoltSum;
-u8  mVoltIdx;
-
-u8 getBattVolt(void)
-{
-    u16 v;
-
-    v = analogRead(PIN_ANALOG_VOLT);
-
-    mVoltSum += v;
-    mVoltSum -= mVoltBuf[mVoltIdx];
-    mVoltBuf[mVoltIdx++] = v;
-    mVoltIdx %= CONFIG_VBAT_SMOOTH;
-
-    u8 t = map(mVoltSum / CONFIG_VBAT_SMOOTH, 0, 1023, 0, 130);
-    LOG(F("ADC:%4d ==> VOLT:%4d\n"), mVoltSum, t);
-
-    return t;
-}
-
 void setup()
 {
     pinMode(PIN_MOT_ENABLE, OUTPUT);
@@ -485,9 +453,8 @@ void setup()
 
     DISABLE_MOTOR();
     digitalWrite(PIN_LED, LOW);
-
-    for (u8 i = 0; i < CONFIG_VBAT_SMOOTH; i++)
-        getBattVolt();
+    mRobotAux.begin();
+    mLastBatt = mRobotAux.getBattVolt();
 
 #if __STD_SERIAL__
     Serial.begin(115200);
@@ -594,13 +561,14 @@ void setup()
     mIsShutdown = false;
 }
 
+u8 led = 0;
+
 void loop()
 {
     float       fDelta;
 
 #if MOTOR_TEST
     s16         motorSpeeds[2];
-
 
     if (mSerial.available()) {
         u8  ch = mSerial.read();
@@ -629,7 +597,22 @@ void loop()
         LOG(F("MOTOR1:%4d, MOTOR2:%4d\n"), motorSpeeds[MOT_1], motorSpeeds[MOT_2]);
     }
 
-    getBattVolt();
+    mCurTS = millis();
+
+    if (mCurTS - mLastBattTS > 100) {
+        mLastBatt = mRobotAux.getBattVolt();
+        LOG(F("VOLT:%4d\n"), mLastBatt);
+
+        for (u8 i = 0; i < 2; i++) {
+            mSonarDist = mRobotAux.getDist(i);
+            if (mSonarDist > 0) {
+                LOG(F("SONAR%d => DIST:%3d Cm\n"), i, mSonarDist);
+            }
+        }
+
+        mRobotAux.updateSonar();
+        mLastBattTS = mCurTS;
+    }
 
     return;
 #endif
@@ -673,6 +656,16 @@ void loop()
         mTargetAngle = constrain(mTargetAngle, -mMaxTargetAngle, mMaxTargetAngle); // limited output
         //LOG(F("AngleAdjusted:%f, EstSpeedFiltered:%f, TargetAngle:%f\n"), mAngleAdjusted, mEstSpeedFiltered, mTargetAngle);
 
+#if 1
+        // check sonar sensor when normal condition
+        if (-45 < mAngleAdjusted && mAngleAdjusted < 45) {
+            s16 dist = mRobotAux.getDist(0);
+            if ((5 < dist && dist < 20) && mTargetAngle < 0) {
+                mTargetAngle = 0;
+            }
+        }
+#endif
+
         // Stability control: This is a PD controller.
         //    input: robot target angle(from SPEED CONTROL), variable: robot angle, output: Motor speed
         //    We integrate the output (sumatory), so the output is really the motor acceleration, not motor speed.
@@ -706,14 +699,14 @@ void loop()
 #endif
 
         // NOW we send the commands to the motors
-        if ((mAngleAdjusted < 76) && (mAngleAdjusted > -76)) { // Is robot ready (upright?)
+        if (-76 < mAngleAdjusted && mAngleAdjusted < 76) { // Is robot ready (upright?)
             // NORMAL MODE
             ENABLE_MOTOR();
             setMotorSpeed(MOT_1, mMotors[MOT_1]);
             setMotorSpeed(MOT_2, mMotors[MOT_2]);
 
             // Normal condition?
-            if ((mAngleAdjusted < 45) && (mAngleAdjusted > -45)) {
+            if (-45 < mAngleAdjusted && mAngleAdjusted < 45) {
                 mP = mUserP;            // Default user control gains
                 mD = mUserD;
                 mThrP = mUserThrP;
@@ -749,10 +742,19 @@ void loop()
         //readControlParameters();
     } // End of new IMU data
 
-#if BATTERY_CHECK
-    if (mCurTS - mLastBattTS > 500) {
+    // every 1sec
+    if (mCurTS - mLastBattTS > 1000) {
+        mLastBatt = mRobotAux.getBattVolt();
+        LOG(F("VOLT:%4d\n"), mLastBatt);
         mLastBattTS = mCurTS;
     }
-#endif
+
+    // every 60ms
+    if (mCurTS - mLastSonarTS > 60) {
+        mRobotAux.updateSonar();
+        led = !led;
+        digitalWrite(PIN_LED, led);
+        mLastSonarTS = mCurTS;
+    }
 }
 

@@ -4,6 +4,8 @@
  the Free Software Foundation, either version 3 of the License, or
  (at your option) any later version.
 
+ This program is derived from deviationTx project for Arduino.
+
  This program is distributed in the hope that it will be useful,
  but WITHOUT ANY WARRANTY; without even the implied warranty of
  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
@@ -11,35 +13,30 @@
  see <http://www.gnu.org/licenses/>
 */
 
+#ifndef _ROBOT_AUX_H_
+#define _ROBOT_AUX_H_
+#include <Arduino.h>
+#include <avr/pgmspace.h>
+#include "Common.h"
+#include "config.h"
 
-#ifndef _COMMON_H_
-#define _COMMON_H_
+class RobotAux
+{
+#define VBAT_SMOOTH_LEVEL       16
 
-#include <stdint.h>
-#include <string.h>
-#include <inttypes.h>
+public:
+    void begin(void);
+    u8   getBattVolt(void);
+    void updateSonar(void);
+    s16  getDist(u8 idx);
 
-typedef int8_t s8;
-typedef int16_t s16;
-typedef int32_t s32;
-typedef uint8_t u8;
-//typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
 
-#ifndef NULL
-#define NULL    0
-#endif
+private:
+    u16         mVoltBuf[VBAT_SMOOTH_LEVEL];
+    u16         mVoltSum;
+    u8          mVoltIdx;
 
-#ifndef TRUE
-#define TRUE    1
-#endif
-
-#ifndef FALSE
-#define FALSE   0
-#endif
-
-#define __DEBUG__       0
-#define __STD_SERIAL__  0
+    u32         mPingTS;
+};
 
 #endif

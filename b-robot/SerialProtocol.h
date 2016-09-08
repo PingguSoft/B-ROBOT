@@ -28,6 +28,7 @@ public:
         MSP_SET_USER_BUTTON = 51,
         MSP_IDENT  = 100,
         MSP_STATUS = 101,
+        MSP_ALTITUDE = 109,
         MSP_ANALOG = 110,
         MSP_MISC   = 114,
         MSP_SET_RAW_RC = 200,
