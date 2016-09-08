@@ -34,6 +34,8 @@
 
 #define PIN_LED                 13
 
+#define PIN_ANALOG_VOLT         6       // A6
+
 
 // NORMAL MODE PARAMETERS (MAXIMUN SETTINGS)
 #define MAX_THROTTLE            580
@@ -90,7 +92,7 @@
 
 #define CLK_PERIOD              2000000
 
-#define MOTOR_TEST              0
+#define MOTOR_TEST              1
 
 /*
 *****************************************************************************************
@@ -449,6 +451,29 @@ s8 inputCallback(u8 cmd, u8 *data, u8 size, u8 *res)
 }
 
 
+#define CONFIG_VBAT_SMOOTH      16
+
+u16 mVoltBuf[CONFIG_VBAT_SMOOTH];
+u16 mVoltSum;
+u8  mVoltIdx;
+
+u8 getBattVolt(void)
+{
+    u16 v;
+
+    v = analogRead(PIN_ANALOG_VOLT);
+
+    mVoltSum += v;
+    mVoltSum -= mVoltBuf[mVoltIdx];
+    mVoltBuf[mVoltIdx++] = v;
+    mVoltIdx %= CONFIG_VBAT_SMOOTH;
+
+    u8 t = map(mVoltSum / CONFIG_VBAT_SMOOTH, 0, 1023, 0, 130);
+    LOG(F("ADC:%4d ==> VOLT:%4d\n"), mVoltSum, t);
+
+    return t;
+}
+
 void setup()
 {
     pinMode(PIN_MOT_ENABLE, OUTPUT);
@@ -461,6 +486,8 @@ void setup()
     DISABLE_MOTOR();
     digitalWrite(PIN_LED, LOW);
 
+    for (u8 i = 0; i < CONFIG_VBAT_SMOOTH; i++)
+        getBattVolt();
 
 #if __STD_SERIAL__
     Serial.begin(115200);
@@ -567,7 +594,6 @@ void setup()
     mIsShutdown = false;
 }
 
-
 void loop()
 {
     float       fDelta;
@@ -575,12 +601,9 @@ void loop()
 #if MOTOR_TEST
     s16         motorSpeeds[2];
 
-    if (Serial.available()) {
-#ifdef __STD_SERIAL__
-        u8  ch = Serial.read();
-#else
+
+    if (mSerial.available()) {
         u8  ch = mSerial.read();
-#endif
 
         switch (ch) {
             case '+':
@@ -605,6 +628,9 @@ void loop()
         }
         LOG(F("MOTOR1:%4d, MOTOR2:%4d\n"), motorSpeeds[MOT_1], motorSpeeds[MOT_2]);
     }
+
+    getBattVolt();
+
     return;
 #endif
 
