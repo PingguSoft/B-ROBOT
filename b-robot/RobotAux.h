@@ -20,6 +20,11 @@
 #include "Common.h"
 #include "config.h"
 
+
+#define SERVO_MIN_PWM    550
+#define SERVO_MAX_PWM   2250
+#define SERVO_MID_PWM   ((SERVO_MIN_PWM + SERVO_MAX_PWM) / 2)
+
 class RobotAux
 {
 #define VBAT_SMOOTH_LEVEL       16
@@ -30,8 +35,12 @@ public:
     void updateSonar(void);
     s16  getDist(u8 idx);
 
+    void moveServo(u8 idx, u16 pwm);
 
 private:
+    void initServo(void);
+
+
     u16         mVoltBuf[VBAT_SMOOTH_LEVEL];
     u16         mVoltSum;
     u8          mVoltIdx;

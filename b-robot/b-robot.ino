@@ -50,7 +50,6 @@
 #define BATTERY_WARNING         105     // (10.5 volts) aprox [for lipo batts, disable by default]
 #define BATTERY_SHUTDOWN        95      // (9.5 volts) [for lipo batts]
 #define SHUTDOWN_WHEN_BATTERY_OFF 0     // 0: Not used, 1: Robot will shutdown when battery is off (BATTERY_CHECK SHOULD BE 1)
-#define DEBUG                   0       // 0 = No debug info (default)
 
 #define ZERO_SPEED              65535
 #define MAX_ACCEL               7       // Maximun motor acceleration (MAX RECOMMENDED VALUE: 8) (default:7)
@@ -88,15 +87,12 @@
 * VARIABLES
 *****************************************************************************************
 */
-bool        mIsShutdown = false; // Robot shutdown flag => Out of
-
-// MPU control/status vars
-u8          mFifoBufs[18];          // FIFO storage buffer
-
+bool        mIsShutdown = false;
+u8          mFifoBufs[18];
+u32         mCurTS;
+u32         mLastTS;
 u32         mLastBattTS;
 u32         mLastSonarTS;
-u32         mLastTS;
-u32         mCurTS;
 
 // class default I2C address is 0x68 for MPU6050
 MPU6050     mMPU;
@@ -127,23 +123,22 @@ float       mMaxSteering = MAX_STEERING;
 float       mMaxTargetAngle = MAX_TARGET_ANGLE;
 float       mControlOutput = 0;
 
-volatile u16 mTimerVals[2];
-volatile u16 mTimerValOrgs[2];
+u16         mPeriod[2];
 s16         mMotors[2];
 s16         mSpeeds[2];         // Actual speed of motors
 volatile s8 mDirs[2];           // Actual direction of steppers motors
 s16         mActSpeed;          // overall robot speed (measured from steppers speed)
 s16         mActSpeedOld;
 float       mEstSpeedFiltered;  // Estimated robot speed
-
-#if !__STD_SERIAL__
 SerialProtocol mSerial;
-#endif
 
 RobotAux    mRobotAux;
 u8          mLastBatt;
 
-s16         mSonarDist;
+u8          mLastAuxBtn = 0;
+u8          mRaiseUp = 0;
+u8          mHeartBeat = 0;
+
 
 // DMP FUNCTIONS
 // This function defines the weight of the accel on the sensor fusion
@@ -191,7 +186,6 @@ float getStabilityPDControlOutput(float DT, float input, float setPoint,  float 
     return (output);
 }
 
-
 // PI controller implementation (Proportional, integral). DT is in miliseconds
 float getSpeedPIControlOutput(float DT, float input, float setPoint,  float p, float i)
 {
@@ -207,7 +201,7 @@ float getSpeedPIControlOutput(float DT, float input, float setPoint,  float p, f
 }
 
 // 16 single cycle instructions = 1us at 16Mhz
-void delay_1us()
+void delay1uS()
 {
     __asm__ __volatile__ (
     "nop" "\n\t"
@@ -228,152 +222,85 @@ void delay_1us()
     "nop");
 }
 
-//
-// 8bit mode for matching with timer2
-//
 ISR(TIMER1_COMPA_vect)
 {
     if (mDirs[MOT_1] == 0) {
         return;
     }
 
-    u16 tick = mTimerVals[MOT_1];
-    if (tick > 255) {
-        tick -= 255;
-        if (tick < 20) {
-            goto trigger;
-        } else if (tick <= 255) {
-            OCR1A = tick;
-            TCNT1 = 0;
-        }
-        mTimerVals[MOT_1] = tick;
-        return;
-    }
-
-trigger:
+    OCR1A = TCNT1 + mPeriod[MOT_1];
     SET(PORT_MOT_STEP, BIT_MOT_1_STEP);
-    u16 tickOrg = mTimerValOrgs[MOT_1];
-    if (tickOrg > 255) {
-        OCR1A = 255;
-        TCNT1 = 0;
-        mTimerVals[MOT_1] = tickOrg;
-    } else {
-        OCR1A = tickOrg;
-        TCNT1 = 0;
-    }
+    delay1uS();
     CLR(PORT_MOT_STEP, BIT_MOT_1_STEP);
 }
 
-
-ISR(TIMER2_COMPA_vect)
+ISR(TIMER1_COMPB_vect)
 {
     if (mDirs[MOT_2] == 0) {
         return;
     }
 
-    u16 tick = mTimerVals[MOT_2];
-    if (tick > 255) {
-        tick -= 255;
-        if (tick < 20) {
-            goto trigger;
-        } else if (tick <= 255) {
-            OCR2A = tick;
-            TCNT2 = 0;
-        }
-        mTimerVals[MOT_2] = tick;
-        return;
-    }
-
-trigger:
+    OCR1B = TCNT1 + mPeriod[MOT_2];
     SET(PORT_MOT_STEP, BIT_MOT_2_STEP);
-    u16 tickOrg = mTimerValOrgs[MOT_2];
-    if (tickOrg > 255) {
-        OCR2A = 255;
-        TCNT2 = 0;
-        mTimerVals[MOT_2] = tickOrg;
-    } else {
-        OCR2A = tickOrg;
-        TCNT2 = 0;
-    }
+    delay1uS();
     CLR(PORT_MOT_STEP, BIT_MOT_2_STEP);
 }
 
-
-// tspeed could be positive or negative (reverse)
-void setMotorSpeed(s8 mot, s16 tspeed)
+void setMotorSpeed(s16 *motors)
 {
-    long timer_period;
+    long period;
     s16  speed;
 
-    // WE LIMIT MAX ACCELERATION of the motors
-    if ((mSpeeds[mot] - tspeed) > MAX_ACCEL)
-        mSpeeds[mot] -= MAX_ACCEL;
-    else if ((mSpeeds[mot] - tspeed) < -MAX_ACCEL)
-        mSpeeds[mot] += MAX_ACCEL;
-    else
-        mSpeeds[mot] = tspeed;
+    for (u8 i = 0; i < 2; i++) {
+        if ((mSpeeds[i] - motors[i]) > MAX_ACCEL)
+            mSpeeds[i] -= MAX_ACCEL;
+        else if ((mSpeeds[i] - motors[i]) < -MAX_ACCEL)
+            mSpeeds[i] += MAX_ACCEL;
+        else
+            mSpeeds[i] = motors[i];
 
 #if MICROSTEPPING==16
-    speed = mSpeeds[mot] * 46;                  // Adjust factor from control output speed to real motor speed in steps/second
+        speed = mSpeeds[i] * 46;                  // Adjust factor from control output speed to real motor speed in steps/second
 #else
-    speed = mSpeeds[mot] * 23;                  // 1/8 Microstepping
+        speed = mSpeeds[i] * 23;                  // 1/8 Microstepping
 #endif
 
-    if (speed == 0) {
-        timer_period = ZERO_SPEED;
-        mDirs[mot] = 0;
-    } else if (speed > 0) {
-        timer_period = CLK_PERIOD / speed;
-        mDirs[mot] = 1;
-        if (mot == MOT_1)
-            SET(PORT_MOT_DIR, BIT_MOT_1_DIR);   // DIR Motor 1 (Forward)
-        else
-            CLR(PORT_MOT_DIR, BIT_MOT_2_DIR);   // DIR Motor 2 (Forward)
-    } else {
-        timer_period = CLK_PERIOD / -speed;
-        mDirs[mot] = -1;
-        if (mot == MOT_1)
-            CLR(PORT_MOT_DIR, BIT_MOT_1_DIR);   // DIR Motor 1 (backward)
-        else
-            SET(PORT_MOT_DIR, BIT_MOT_2_DIR);   // DIR Motor 2 (backward)
-    }
+        if (motors[i] == 0) {
+            period = ZERO_SPEED;
+            mDirs[i] = 0;
+        } else if (motors[i] > 0) {
+            period = CLK_PERIOD / speed;
 
-    if (timer_period > 65536)                   // Check for minimun speed (maximun period without overflow)
-        timer_period = ZERO_SPEED;
-
-    if (mot == MOT_1) {
-        TIMSK1 &= ~BV(OCIE1A);
-        mTimerVals[mot] = timer_period;
-        mTimerValOrgs[mot] = timer_period;
-        if (timer_period <= 255) {
-            OCR1A = (u8)timer_period;
-            if (TCNT1 > OCR1A)
-                TCNT1 = 0;
+            // forward
+            mDirs[i] = 1;
+            if (i == MOT_1) {
+                SET(PORT_MOT_DIR, BIT_MOT_1_DIR);
+            } else {
+                CLR(PORT_MOT_DIR, BIT_MOT_2_DIR);
+            }
         } else {
-            OCR1A = 255;
-            TCNT1 = 0;
-        }
-        TIMSK1 |= BV(OCIE1A);
-    } else {
-        TIMSK2 &= ~BV(OCIE2A);
-        mTimerVals[mot] = timer_period;
-        mTimerValOrgs[mot] = timer_period;
-        if (timer_period <= 255) {
-            OCR2A = (u8)timer_period;
-            if (TCNT2 > OCR2A)
-                TCNT2 = 0;
-        } else {
-            OCR2A = 255;
-            TCNT2 = 0;
-        }
-        TIMSK2 |= BV(OCIE2A);
-    }
+            period = CLK_PERIOD / -speed;
 
-    //LOG(F("MOT:%2d, REQ_SPEED:%3d, SPEED=%5d, PERIOD:%8ld\n"), mot, tspeed, speed, mTimerVals[mot]);
+            // backward
+            mDirs[i] = -1;
+            if (i == MOT_1) {
+                CLR(PORT_MOT_DIR, BIT_MOT_1_DIR);
+            } else {
+                SET(PORT_MOT_DIR, BIT_MOT_2_DIR);
+            }
+        }
+
+        if (period > 65536)
+            period = ZERO_SPEED;
+
+        mPeriod[i] = period;
+        if (i == MOT_1) {
+            OCR1A = TCNT1 + period;
+        } else {
+            OCR1B = TCNT1 + period;
+        }
+    }
 }
-
-
-u8 mAuxBtn = 0;
 
 s8 inputCallback(u8 cmd, u8 *data, u8 size, u8 *res)
 {
@@ -423,7 +350,7 @@ s8 inputCallback(u8 cmd, u8 *data, u8 size, u8 *res)
                 if (*rc++ > 1700)
                     val |= BV(i);
             }
-            if (val != mAuxBtn) {
+            if (val != mLastAuxBtn) {
                 if (val & BV(0)) {
                     mMaxThrottle = MAX_THROTTLE_PRO;
                     mMaxSteering = MAX_STEERING_PRO;
@@ -433,14 +360,24 @@ s8 inputCallback(u8 cmd, u8 *data, u8 size, u8 *res)
                     mMaxSteering = MAX_STEERING;
                     mMaxTargetAngle = MAX_TARGET_ANGLE;
                 }
-                mAuxBtn = val;
+
+                mRaiseUp    = val & BV(1);
+                mIsShutdown = val & BV(3);
+
+                if (mIsShutdown) {
+                    s16 motors[2] = { 0, 0 };
+
+                    setMotorSpeed(motors);
+                    DISABLE_MOTOR();
+                    mRobotAux.moveServo(0, SERVO_MID_PWM);
+                }
+                mLastAuxBtn  = val;
             }
             break;
     }
 
     return ret;
 }
-
 
 void setup()
 {
@@ -456,19 +393,13 @@ void setup()
     mRobotAux.begin();
     mLastBatt = mRobotAux.getBattVolt();
 
-#if __STD_SERIAL__
-    Serial.begin(115200);
-#else
     mSerial.begin(57600);
     mSerial.registerMSPCallback(inputCallback);
-#endif
 
     LOG(F("---- BROBOT ---- \n"));
 
 #if !MOTOR_TEST
-    LOG(F("Initializing I2C devices...\n"));
     Wire.begin();
-    // I2C 400Khz fast mode
     TWSR = 0;
     TWBR = ((16000000L / I2C_SPEED) - 16) / 2;
     TWCR = 1 << TWEN;
@@ -485,11 +416,11 @@ void setup()
     LOG(F("Initializing DMP...\n"));
     u8 status = mMPU.dmpInitialize();
     if (status == 0) {
-        // turn on the DMP, now that it's ready
         LOG(F("Enabling DMP...\n"));
         mMPU.setDMPEnabled(true);
         status = mMPU.getIntStatus();
-    } else { // ERROR!
+    } else {
+        // ERROR!
         // 1 = initial memory load failed
         // 2 = DMP configuration updates failed
         // (if it's going to break, usually the code will be 1)
@@ -498,59 +429,53 @@ void setup()
 
     // Gyro calibration
     // The robot must be steady during initialization
-    LOG(F("Gyro calibration!!  Dont move the robot in 10 seconds...\n"));
     // Time to settle things... the bias_from_no_motion algorithm needs some time to take effect and reset gyro bias.
-    delay(10000);
+    LOG(F("Gyro calibration!!  Dont move the robot in 10 seconds...\n"));
+    mLastTS = millis();
+    do {
+        mHeartBeat = !mHeartBeat;
+        digitalWrite(PIN_LED, mHeartBeat);
+        delay(50);
+    } while (millis() - mLastTS < 10000);
 
-    // Verify connection
     LOG(F("Testing device connections...\n"));
-    if (mMPU.testConnection())
+    if (mMPU.testConnection()) {
         LOG(F("MPU6050 connection successful\n"));
-    else
+    } else {
         LOG(F("MPU6050 connection failed\n"));
+    }
 
-    //Adjust sensor fusion gain
     LOG(F("Adjusting DMP sensor fusion gain...\n"));
     setSensorFusionAccelGain(0x20);
-    delay(200);
-
-    // Init servos
-    LOG(F("Servo initialization...\n"));
 #endif
 
-    // STEPPER MOTORS INITIALIZATION
     LOG(F("Steper motors initialization...\n"));
-
-    // MOTOR1 => TIMER1
-    TCCR1A = 0;                                 // Timer1 CTC mode 4, OCxA,B outputs disconnected
-    TCCR1B = BV(WGM12) | BV(CS11);              // Prescaler=8, => 2Mhz
+    // TIMER1 for motor step
+    TCCR1A = 0;                                 // Timer1 normal mode 0, OCxA,B outputs disconnected
+    TCCR1B = BV(CS11);                          // Prescaler=8, => 2Mhz
     OCR1A  = ZERO_SPEED;
+    OCR1B  = ZERO_SPEED;
     mDirs[MOT_1] = 0;
-    TCNT1  = 0;
-
-    // MOTOR2 => TIMER2
-    TCCR2A = 0;                                 // Timer2 CTC mode 2, OCxA,B outputs disconnected
-    TCCR2B = BV(WGM21) | BV(CS21);              // Prescaler=8, => 2MHz
-    OCR2A  = ZERO_SPEED;                        // Motor stopped
     mDirs[MOT_2] = 0;
-    TCNT2 = 0;
-
-    // Enable TIMERs interrupts
-    TIMSK1 |= BV(OCIE1A); // Enable Timer1 interrupt
-    TIMSK2 |= BV(OCIE2A); // Enable Timer2 interrupt
-
+    TCNT1  = 0;
+    TIMSK1 |= (BV(OCIE1A) | BV(OCIE1B));        // Enable Timer1 interrupt
     ENABLE_MOTOR();
+
     // Little motor vibration and servo move to indicate that robot is ready
+    s16 speeds[2];
     for (u8 k = 0; k < 5; k++) {
-        setMotorSpeed(MOT_1, 5);
-        setMotorSpeed(MOT_2, -5);
+        speeds[0] = 5;
+        speeds[1] = -5;
+        setMotorSpeed(speeds);
         delay(200);
-        setMotorSpeed(MOT_1, -5);
-        setMotorSpeed(MOT_2, 5);
+        speeds[0] = -5;
+        speeds[1] = 5;
+        setMotorSpeed(speeds);
         delay(200);
     }
-    setMotorSpeed(MOT_1, 0);
-    setMotorSpeed(MOT_2, 0);
+    speeds[0] = 0;
+    speeds[1] = 0;
+    setMotorSpeed(speeds);
 
     LOG(F("Let's start...\n"));
 #if !MOTOR_TEST
@@ -561,69 +486,126 @@ void setup()
     mIsShutdown = false;
 }
 
-u8 led = 0;
 
 void loop()
 {
     float       fDelta;
 
 #if MOTOR_TEST
-    s16         motorSpeeds[2];
+    static s16  motorSpeeds[2];
+    static u16  servoPwm[2] = { 1000, 1000 };
 
     if (mSerial.available()) {
         u8  ch = mSerial.read();
 
         switch (ch) {
-            case '+':
-                motorSpeeds[MOT_1] = constrain(motorSpeeds[MOT_1] + 5, -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
-                setMotorSpeed(MOT_1, motorSpeeds[MOT_1]);
-                break;
-
-            case '-':
-                motorSpeeds[MOT_1] = constrain(motorSpeeds[MOT_1] - 5, -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
-                setMotorSpeed(MOT_1, motorSpeeds[MOT_1]);
-                break;
-
             case 'a':
-                motorSpeeds[MOT_2] = constrain(motorSpeeds[MOT_2] + 5, -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
-                setMotorSpeed(MOT_2, motorSpeeds[MOT_2]);
+                motorSpeeds[MOT_1] = constrain(motorSpeeds[MOT_1] + 5, -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
+                setMotorSpeed(motorSpeeds);
                 break;
 
             case 'z':
+                motorSpeeds[MOT_1] = constrain(motorSpeeds[MOT_1] - 5, -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
+                setMotorSpeed(motorSpeeds);
+                break;
+
+            case 's':
+                motorSpeeds[MOT_2] = constrain(motorSpeeds[MOT_2] + 5, -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
+                setMotorSpeed(motorSpeeds);
+                break;
+
+            case 'x':
                 motorSpeeds[MOT_2] = constrain(motorSpeeds[MOT_2] - 5, -MAX_CONTROL_OUTPUT, MAX_CONTROL_OUTPUT);
-                setMotorSpeed(MOT_2, motorSpeeds[MOT_2]);
+                setMotorSpeed(motorSpeeds);
+                break;
+
+            case '1':
+                servoPwm[0] = constrain(servoPwm[0] + 10, SERVO_MIN_PWM, SERVO_MAX_PWM);
+                mRobotAux.moveServo(0, servoPwm[0]);
+                break;
+
+            case 'q':
+                servoPwm[0] = constrain(servoPwm[0] - 10, SERVO_MIN_PWM, SERVO_MAX_PWM);
+                mRobotAux.moveServo(0, servoPwm[0]);
+                break;
+
+            case '[':
+                for (u16 i = SERVO_MIN_PWM; i<= SERVO_MAX_PWM; i += 10) {
+                    mRobotAux.moveServo(0, i);
+                    delay(20);
+                }
+                break;
+
+            case '2':
+                servoPwm[1] = constrain(servoPwm[1] + 10, SERVO_MIN_PWM, SERVO_MAX_PWM);
+                mRobotAux.moveServo(1, servoPwm[1]);
+                break;
+
+            case 'w':
+                servoPwm[1] = constrain(servoPwm[1] - 10, SERVO_MIN_PWM, SERVO_MAX_PWM);
+                mRobotAux.moveServo(1, servoPwm[1]);
+                break;
+
+            case ']':
+                for (u16 i = SERVO_MIN_PWM; i<= SERVO_MAX_PWM; i += 10) {
+                    mRobotAux.moveServo(1, i);
+                    delay(20);
+                }
                 break;
         }
-        LOG(F("MOTOR1:%4d, MOTOR2:%4d\n"), motorSpeeds[MOT_1], motorSpeeds[MOT_2]);
+        LOG(F("MOTOR1:%4d, MOTOR2:%4d, SERVO1:%4d, SERVO2:%4d\n"), motorSpeeds[MOT_1], motorSpeeds[MOT_2], servoPwm[0], servoPwm[1]);
     }
 
+#if 0
     mCurTS = millis();
-
-    if (mCurTS - mLastBattTS > 100) {
+    if (mCurTS - mLastBattTS > 50) {
         mLastBatt = mRobotAux.getBattVolt();
         LOG(F("VOLT:%4d\n"), mLastBatt);
 
+        s16 dist;
         for (u8 i = 0; i < 2; i++) {
-            mSonarDist = mRobotAux.getDist(i);
-            if (mSonarDist > 0) {
-                LOG(F("SONAR%d => DIST:%3d Cm\n"), i, mSonarDist);
+            dist = mRobotAux.getDist(i);
+            if (dist > 0) {
+                LOG(F("SONAR%d => DIST:%3d Cm\n"), i, dist);
             }
         }
 
         mRobotAux.updateSonar();
         mLastBattTS = mCurTS;
     }
+#endif
 
     return;
 #endif
 
 
-#if !__STD_SERIAL__
     mSerial.handleMSP();
-#endif
-
     mCurTS = millis();
-    // New DMP Orientation solution?
+
+    // every 5sec
+    if (mCurTS - mLastBattTS > 5000) {
+        mLastBatt = mRobotAux.getBattVolt();
+        LOG(F("VOLT:%4d\n"), mLastBatt);
+        mLastBattTS = mCurTS;
+    }
+
+    // every 50ms
+    if (mCurTS - mLastSonarTS > 50) {
+        s16 dist = mRobotAux.getDist(0);
+        if (dist > 0) {
+            LOG(F("%8ld DIST:%3d Cm\n"), micros(), dist);
+        }
+        mRobotAux.updateSonar();
+        mHeartBeat = !mHeartBeat;
+        digitalWrite(PIN_LED, mHeartBeat);
+        mLastSonarTS = mCurTS;
+    }
+
+    if (mIsShutdown) {
+        return;
+    }
+
+
     u16 nFifoCtr = mMPU.getFIFOCount();
     if (nFifoCtr >= 18) {
         // If we have more than one packet we take the easy path: discard the buffer and wait for the next one
@@ -660,7 +642,7 @@ void loop()
         // check sonar sensor when normal condition
         if (-45 < mAngleAdjusted && mAngleAdjusted < 45) {
             s16 dist = mRobotAux.getDist(0);
-            if ((5 < dist && dist < 20) && mTargetAngle < 0) {
+            if ((0 < dist && dist < 20) && mTargetAngle < 0) {
                 mTargetAngle = 0;
             }
         }
@@ -702,8 +684,7 @@ void loop()
         if (-76 < mAngleAdjusted && mAngleAdjusted < 76) { // Is robot ready (upright?)
             // NORMAL MODE
             ENABLE_MOTOR();
-            setMotorSpeed(MOT_1, mMotors[MOT_1]);
-            setMotorSpeed(MOT_2, mMotors[MOT_2]);
+            setMotorSpeed(mMotors);
 
             // Normal condition?
             if (-45 < mAngleAdjusted && mAngleAdjusted < 45) {
@@ -717,44 +698,26 @@ void loop()
                 mThrP = KP_THROTTLE_RAISEUP;
                 mThrI = KI_THROTTLE_RAISEUP;
             }
-        } else {   // Robot not ready (flat), angle > 70º => ROBOT OFF
+        } else {   // Robot not ready (flat)
             DISABLE_MOTOR();
-            setMotorSpeed(MOT_1, 0);
-            setMotorSpeed(MOT_2, 0);
+            s16 motors[2] = { 0, 0 };
+            setMotorSpeed(motors);
             mPIDErrSum = 0;  // Reset PID I term
             mP = KP_RAISEUP;   // CONTROL GAINS FOR RAISE UP
             mD = KD_RAISEUP;
             mThrP = KP_THROTTLE_RAISEUP;
             mThrI = KI_THROTTLE_RAISEUP;
 
-#if 0
-            // if we pulse push1 button we raise up the robot with the servo arm
-            if (OSC.push1) {
-                // Because we know the robot orientation (face down of face up), we move the servo in the appropiate direction for raise up
-                if (angle_adjusted > 0)
-                    BROBOT.moveServo1(SERVO_MIN_PULSEWIDTH);
-                else
-                    BROBOT.moveServo1(SERVO_MAX_PULSEWIDTH);
-            } else
-                BROBOT.moveServo1(SERVO_AUX_NEUTRO);
-#endif
+            if (mRaiseUp) {
+                if (mAngleAdjusted > 0) {
+                    mRobotAux.moveServo(0, SERVO_MIN_PWM);
+                } else {
+                    mRobotAux.moveServo(0, SERVO_MAX_PWM);
+                }
+            } else {
+                mRobotAux.moveServo(0, SERVO_MID_PWM);
+            }
         }
-        //readControlParameters();
-    } // End of new IMU data
-
-    // every 1sec
-    if (mCurTS - mLastBattTS > 1000) {
-        mLastBatt = mRobotAux.getBattVolt();
-        LOG(F("VOLT:%4d\n"), mLastBatt);
-        mLastBattTS = mCurTS;
-    }
-
-    // every 60ms
-    if (mCurTS - mLastSonarTS > 60) {
-        mRobotAux.updateSonar();
-        led = !led;
-        digitalWrite(PIN_LED, led);
-        mLastSonarTS = mCurTS;
     }
 }
 
