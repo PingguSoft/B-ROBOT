@@ -1,6 +1,0 @@
-BROBOT	KEYWORD1
-initServo	KEYWORD2
-moveServo1	KEYWORD2
-moveServo2	KEYWORD2
-readBattery	KEYWORD2
-

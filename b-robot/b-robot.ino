@@ -343,6 +343,10 @@ s8 inputCallback(u8 cmd, u8 *data, u8 size, u8 *res)
 
             // throttle
             val = (*rc++ - 1000);
+            if (-45 < mAngleAdjusted && mAngleAdjusted < 45) {
+                u16 pwm = map(val, 0, 1000, SERVO_MIN_PWM, SERVO_MAX_PWM);
+                mRobotAux.moveServo(0, pwm);
+            }
 
             // AUX1 - AUX4
             val = 0;
@@ -486,12 +490,9 @@ void setup()
     mIsShutdown = false;
 }
 
-
-void loop()
-{
-    float       fDelta;
-
 #if MOTOR_TEST
+void testMotors(void)
+{
     static s16  motorSpeeds[2];
     static u16  servoPwm[2] = { 1000, 1000 };
 
@@ -574,10 +575,18 @@ void loop()
         mLastBattTS = mCurTS;
     }
 #endif
-
-    return;
+}
 #endif
 
+
+void loop()
+{
+    float       fDelta;
+
+#if MOTOR_TEST
+    testMotors();
+    return;
+#endif
 
     mSerial.handleMSP();
     mCurTS = millis();

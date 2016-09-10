@@ -84,3 +84,5 @@ $RECYCLE.BIN/
 
 #eagle temp
 *.s#*
+
+.ref/
