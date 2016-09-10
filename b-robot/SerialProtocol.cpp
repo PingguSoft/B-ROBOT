@@ -297,8 +297,6 @@ void SerialProtocol::sendMSPResp(bool ok, u8 cmd, u8 *data, u8 size)
 
 void SerialProtocol::evalMSPCommand(u8 cmd, u8 *data, u8 size)
 {
-    static u16 wmCycleTime = 0;
-
     u8  buf[22];
     u16 *rc;
 
@@ -309,11 +307,6 @@ void SerialProtocol::evalMSPCommand(u8 cmd, u8 *data, u8 size)
             buf[0] = 240;
             buf[1] = 3;
             sendMSPResp(TRUE, cmd, buf, 7);
-            break;
-
-        case MSP_STATUS:
-            *((u16*)&buf[0]) = wmCycleTime++;
-            sendMSPResp(TRUE, cmd, buf, 11);
             break;
 
         case MSP_MISC:

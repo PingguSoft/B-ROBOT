@@ -308,12 +308,19 @@ s8 inputCallback(u8 cmd, u8 *data, u8 size, u8 *res)
     u32 *ptr;
     u16 val;
     s8  ret = -1;
+    static u16 wmCycleTime = 0;
 
     switch (cmd) {
 
         case SerialProtocol::MSP_ANALOG:
             res[0] = mLastBatt;
             ret = 7;
+            break;
+
+        case SerialProtocol::MSP_STATUS:
+            *((u16*)&res[0]) = wmCycleTime++;
+            *((u32*)&res[6]) = mIsShutdown ? 0 : 1;
+            ret = 11;
             break;
 
         case SerialProtocol::MSP_ALTITUDE:
