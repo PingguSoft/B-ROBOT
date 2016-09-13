@@ -140,6 +140,12 @@ u8          mRaiseUp = 0;
 u8          mHeartBeat = 0;
 
 
+
+/*
+*****************************************************************************************
+* DMP functions
+*****************************************************************************************
+*/
 // DMP FUNCTIONS
 // This function defines the weight of the accel on the sensor fusion
 // default value is 0x80
@@ -222,6 +228,12 @@ void delay1uS()
     "nop");
 }
 
+
+/*
+*****************************************************************************************
+* ISR for TIMER1
+*****************************************************************************************
+*/
 ISR(TIMER1_COMPA_vect)
 {
     if (mDirs[MOT_1] == 0) {
@@ -246,6 +258,12 @@ ISR(TIMER1_COMPB_vect)
     CLR(PORT_MOT_STEP, BIT_MOT_2_STEP);
 }
 
+
+/*
+*****************************************************************************************
+* setMotorSpeed
+*****************************************************************************************
+*/
 void setMotorSpeed(s16 *motors)
 {
     long period;
@@ -302,7 +320,13 @@ void setMotorSpeed(s16 *motors)
     }
 }
 
-s8 inputCallback(u8 cmd, u8 *data, u8 size, u8 *res)
+
+/*
+*****************************************************************************************
+* mspCallback
+*****************************************************************************************
+*/
+s8 mspCallback(u8 cmd, u8 *data, u8 size, u8 *res)
 {
     u16 *rc;
     u32 *ptr;
@@ -390,6 +414,12 @@ s8 inputCallback(u8 cmd, u8 *data, u8 size, u8 *res)
     return ret;
 }
 
+
+/*
+*****************************************************************************************
+* setup
+*****************************************************************************************
+*/
 void setup()
 {
     pinMode(PIN_MOT_ENABLE, OUTPUT);
@@ -405,7 +435,7 @@ void setup()
     mLastBatt = mRobotAux.getBattVolt();
 
     mSerial.begin(57600);
-    mSerial.registerMSPCallback(inputCallback);
+    mSerial.registerMSPCallback(mspCallback);
 
     LOG(F("---- BROBOT ---- \n"));
 
@@ -497,11 +527,19 @@ void setup()
     mIsShutdown = false;
 }
 
+
+/*
+*****************************************************************************************
+* test routines
+*****************************************************************************************
+*/
 #if MOTOR_TEST
 void testMotors(void)
 {
     static s16  motorSpeeds[2];
     static u16  servoPwm[2] = { 1000, 1000 };
+    static bool isBattMon  = false;
+    static bool isSonarMon = false;
 
     if (mSerial.available()) {
         u8  ch = mSerial.read();
@@ -560,32 +598,47 @@ void testMotors(void)
                     delay(20);
                 }
                 break;
+
+            case 'b':
+                isBattMon = !isBattMon;
+                break;
+
+            case 'u':
+                isSonarMon = !isSonarMon;
+                break;
         }
-        LOG(F("MOTOR1:%4d, MOTOR2:%4d, SERVO1:%4d, SERVO2:%4d\n"), motorSpeeds[MOT_1], motorSpeeds[MOT_2], servoPwm[0], servoPwm[1]);
+        LOG(F("MOTOR1:%4d, MOTOR2:%4d, SERVO1:%4d, SERVO2:%4d, BATTMON:%1d, SONARMON:%1d\n"),
+            motorSpeeds[MOT_1], motorSpeeds[MOT_2], servoPwm[0], servoPwm[1], isBattMon, isSonarMon);
     }
 
-#if 0
     mCurTS = millis();
     if (mCurTS - mLastBattTS > 50) {
-        mLastBatt = mRobotAux.getBattVolt();
-        LOG(F("VOLT:%4d\n"), mLastBatt);
-
-        s16 dist;
-        for (u8 i = 0; i < 2; i++) {
-            dist = mRobotAux.getDist(i);
-            if (dist > 0) {
-                LOG(F("SONAR%d => DIST:%3d Cm\n"), i, dist);
-            }
+        if (isBattMon) {
+            mLastBatt = mRobotAux.getBattVolt();
+            LOG(F("VOLT:%4d\n"), mLastBatt);
         }
 
-        mRobotAux.updateSonar();
+        if (isSonarMon) {
+            s16 dist;
+            for (u8 i = 0; i < 2; i++) {
+                dist = mRobotAux.getDist(i);
+                if (dist > 0) {
+                    LOG(F("SONAR%d => DIST:%3d Cm\n"), i, dist);
+                }
+            }
+            mRobotAux.updateSonar();
+        }
         mLastBattTS = mCurTS;
     }
-#endif
 }
 #endif
 
 
+/*
+*****************************************************************************************
+* loop
+*****************************************************************************************
+*/
 void loop()
 {
     float       fDelta;
@@ -620,7 +673,6 @@ void loop()
     if (mIsShutdown) {
         return;
     }
-
 
     u16 nFifoCtr = mMPU.getFIFOCount();
     if (nFifoCtr >= 18) {
