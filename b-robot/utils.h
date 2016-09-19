@@ -17,7 +17,8 @@
 #define _UTILS_H_
 #include <Arduino.h>
 #include <avr/pgmspace.h>
-#include "Common.h"
+#include "common.h"
+#include "config.h"
 #include "SerialProtocol.h"
 
 // Bit vector from bit position

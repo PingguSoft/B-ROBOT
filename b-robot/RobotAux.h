@@ -17,7 +17,8 @@
 #define _ROBOT_AUX_H_
 #include <Arduino.h>
 #include <avr/pgmspace.h>
-#include "Common.h"
+#include "common.h"
+#include "utils.h"
 #include "config.h"
 
 

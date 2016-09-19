@@ -3,7 +3,6 @@
 #include <Wire.h>
 #include <I2Cdev.h>
 #include <JJ_MPU6050_DMP_6Axis.h>  // Modified version of the MPU6050 library to work with DMP (see comments inside)
-
 #include "common.h"
 #include "config.h"
 #include "utils.h"
@@ -69,7 +68,6 @@
 
 #define CLK_PERIOD              2000000
 
-#define MOTOR_TEST              0
 
 /*
 *****************************************************************************************
@@ -79,8 +77,8 @@
 #define CLR(x,y)                (x&=(~(1<<y)))
 #define SET(x,y)                (x|=(1<<y))
 
-#define ENABLE_MOTOR()          digitalWrite(PIN_MOT_ENABLE, LOW)
-#define DISABLE_MOTOR()         digitalWrite(PIN_MOT_ENABLE, HIGH)
+#define ENABLE_MOTORS()         digitalWrite(PIN_MOT_1_ENABLE, LOW);  digitalWrite(PIN_MOT_2_ENABLE, LOW);
+#define DISABLE_MOTORS()        digitalWrite(PIN_MOT_1_ENABLE, HIGH); digitalWrite(PIN_MOT_2_ENABLE, HIGH);
 
 /*
 *****************************************************************************************
@@ -93,6 +91,8 @@ u32         mCurTS;
 u32         mLastTS;
 u32         mLastBattTS;
 u32         mLastSonarTS;
+u16         mCycleTime = 0;
+u16         mErrCtr = 0;
 
 // class default I2C address is 0x68 for MPU6050
 MPU6050     mMPU;
@@ -241,9 +241,9 @@ ISR(TIMER1_COMPA_vect)
     }
 
     OCR1A = TCNT1 + mPeriod[MOT_1];
-    SET(PORT_MOT_STEP, BIT_MOT_1_STEP);
+    SET(PORT_MOT_1_STEP, BIT_MOT_1_STEP);
     delay1uS();
-    CLR(PORT_MOT_STEP, BIT_MOT_1_STEP);
+    CLR(PORT_MOT_1_STEP, BIT_MOT_1_STEP);
 }
 
 ISR(TIMER1_COMPB_vect)
@@ -253,9 +253,9 @@ ISR(TIMER1_COMPB_vect)
     }
 
     OCR1B = TCNT1 + mPeriod[MOT_2];
-    SET(PORT_MOT_STEP, BIT_MOT_2_STEP);
+    SET(PORT_MOT_2_STEP, BIT_MOT_2_STEP);
     delay1uS();
-    CLR(PORT_MOT_STEP, BIT_MOT_2_STEP);
+    CLR(PORT_MOT_2_STEP, BIT_MOT_2_STEP);
 }
 
 
@@ -292,9 +292,9 @@ void setMotorSpeed(s16 *motors)
             // forward
             mDirs[i] = 1;
             if (i == MOT_1) {
-                SET(PORT_MOT_DIR, BIT_MOT_1_DIR);
+                SET(PORT_MOT_1_DIR, BIT_MOT_1_DIR);
             } else {
-                CLR(PORT_MOT_DIR, BIT_MOT_2_DIR);
+                CLR(PORT_MOT_2_DIR, BIT_MOT_2_DIR);
             }
         } else {
             period = CLK_PERIOD / -speed;
@@ -302,9 +302,9 @@ void setMotorSpeed(s16 *motors)
             // backward
             mDirs[i] = -1;
             if (i == MOT_1) {
-                CLR(PORT_MOT_DIR, BIT_MOT_1_DIR);
+                CLR(PORT_MOT_1_DIR, BIT_MOT_1_DIR);
             } else {
-                SET(PORT_MOT_DIR, BIT_MOT_2_DIR);
+                SET(PORT_MOT_2_DIR, BIT_MOT_2_DIR);
             }
         }
 
@@ -321,6 +321,7 @@ void setMotorSpeed(s16 *motors)
 }
 
 
+#if __MSP__
 /*
 *****************************************************************************************
 * mspCallback
@@ -332,7 +333,7 @@ s8 mspCallback(u8 cmd, u8 *data, u8 size, u8 *res)
     u32 *ptr;
     u16 val;
     s8  ret = -1;
-    static u16 wmCycleTime = 0;
+    s16 dist;
 
     switch (cmd) {
 
@@ -342,14 +343,19 @@ s8 mspCallback(u8 cmd, u8 *data, u8 size, u8 *res)
             break;
 
         case SerialProtocol::MSP_STATUS:
-            *((u16*)&res[0]) = wmCycleTime++;
+            *((u16*)&res[0]) = mCycleTime;
+            *((u16*)&res[2]) = mErrCtr;
             *((u32*)&res[6]) = mIsShutdown ? 0 : 1;
             ret = 11;
             break;
 
         case SerialProtocol::MSP_ALTITUDE:
             ptr = (u32*)res;
-            *ptr = mRobotAux.getDist(0);
+            dist = mRobotAux.getDist(0);
+            if (dist > 0)
+                *ptr = dist;
+            else
+                *ptr = 0;
             ret = 6;
             break;
 
@@ -403,7 +409,7 @@ s8 mspCallback(u8 cmd, u8 *data, u8 size, u8 *res)
                     s16 motors[2] = { 0, 0 };
 
                     setMotorSpeed(motors);
-                    DISABLE_MOTOR();
+                    DISABLE_MOTORS();
                     mRobotAux.moveServo(0, SERVO_MID_PWM);
                 }
                 mLastAuxBtn  = val;
@@ -413,7 +419,165 @@ s8 mspCallback(u8 cmd, u8 *data, u8 size, u8 *res)
 
     return ret;
 }
+#endif
 
+#if __OSC__
+/*
+*****************************************************************************************
+* oscCallback
+*****************************************************************************************
+*/
+float getFloat(u8 *buf)
+{
+union
+{
+    u8    buf[4];
+    float d;
+} u;
+
+    u.buf[0] = buf[0];
+    u.buf[1] = buf[1];
+    u.buf[2] = buf[2];
+    u.buf[3] = buf[3];
+
+    return u.d;
+}
+
+s8 oscPage1(u8 *data, u8 size, u8 *res)
+{
+    s8  ret = -1;
+
+    switch (data[0]) {
+        // fader
+        case 'f':
+            if (!strncmp(data, "fader", 5)) {
+                switch (data[5]) {
+                    case '1':
+                        mThrottle = (getFloat(&data[13]) - 0.5) * mMaxThrottle;
+                        break;
+
+                    case '2':
+                        mSteering = getFloat(&data[13]);
+                        if (mSteering > 0)
+                            mSteering = (mSteering * mSteering + 0.5 * mSteering) * mMaxSteering;
+                        else
+                            mSteering = (-mSteering * mSteering + 0.5 * mSteering) * mMaxSteering;
+                        break;
+                }
+            }
+            break;
+
+        // toggle
+        case 't':
+            if (!strncmp(data, "toggle", 6)) {
+                switch (data[6]) {
+                    case '1':
+                        if (getFloat(&data[13]) > 0) {
+                            mMaxThrottle = MAX_THROTTLE_PRO;
+                            mMaxSteering = MAX_STEERING_PRO;
+                            mMaxTargetAngle = MAX_TARGET_ANGLE_PRO;
+                        } else {
+                            mMaxThrottle = MAX_THROTTLE;
+                            mMaxSteering = MAX_STEERING;
+                            mMaxTargetAngle = MAX_TARGET_ANGLE;
+                        }
+                        break;
+                }
+            }
+            break;
+
+        // push
+        case 'p':
+            if (!strncmp(data, "push", 4)) {
+                switch (data[4]) {
+                    case '1':
+                        if (getFloat(&data[13]) > 0) {
+                            mRaiseUp = 1;
+                        } else {
+                            mRaiseUp = 0;
+                        }
+                        break;
+                }
+            }
+            break;
+    }
+
+    return ret;
+}
+
+s8 oscPage2(u8 *data, u8 size, u8 *res)
+{
+    s8  ret = -1;
+
+    switch (data[0]) {
+        // fader
+        case 'f':
+            if (!strncmp(data, "fader", 5)) {
+                switch (data[5]) {
+                    case '1':
+                        mUserP = KP * 2 * getFloat(&data[13]);
+                        break;
+
+                    case '2':
+                        mUserD = KD * 2 * getFloat(&data[13]);
+                        break;
+
+                    case '3':
+                        mUserThrP = KP_THROTTLE * 2 * getFloat(&data[13]);
+                        break;
+
+                    case '4':
+                        mUserThrI = (KI_THROTTLE + 0.1) * 2 * getFloat(&data[13]);
+                        break;
+                }
+            }
+            break;
+
+
+        // push
+        case 'p':
+            if (!strncmp(data, "push", 4)) {
+                switch (data[4]) {
+                    case '1':
+                        if (getFloat(&data[13]) > 0) {
+                            mIsShutdown = 1;
+                        } else {
+                            mIsShutdown = 0;
+                        }
+
+                        if (mIsShutdown) {
+                            s16 motors[2] = { 0, 0 };
+
+                            setMotorSpeed(motors);
+                            DISABLE_MOTORS();
+                            mRobotAux.moveServo(0, SERVO_MID_PWM);
+                        }
+                        break;
+                }
+            }
+            break;
+    }
+
+    return ret;
+}
+
+s8 oscCallback(u8 cmd, u8 *data, u8 size, u8 *res)
+{
+    s8 ret = -1;
+
+    switch (cmd) {
+        case 1:
+            ret = oscPage1(data, size, res);
+            break;
+
+        case 2:
+            ret = oscPage2(data, size, res);
+            break;
+    }
+
+    return ret;
+}
+#endif
 
 /*
 *****************************************************************************************
@@ -422,24 +586,32 @@ s8 mspCallback(u8 cmd, u8 *data, u8 size, u8 *res)
 */
 void setup()
 {
-    pinMode(PIN_MOT_ENABLE, OUTPUT);
+    pinMode(PIN_MOT_1_ENABLE, OUTPUT);
     pinMode(PIN_MOT_1_STEP, OUTPUT);
     pinMode(PIN_MOT_1_DIR, OUTPUT);
+
+    pinMode(PIN_MOT_2_ENABLE, OUTPUT);
     pinMode(PIN_MOT_2_DIR, OUTPUT);
     pinMode(PIN_MOT_2_STEP, OUTPUT);
     pinMode(PIN_LED, OUTPUT);
 
-    DISABLE_MOTOR();
+    DISABLE_MOTORS();
     digitalWrite(PIN_LED, LOW);
     mRobotAux.begin();
     mLastBatt = mRobotAux.getBattVolt();
 
+
+#if __OSC__
+    mSerial.begin(115200);
+    mSerial.registerCallback(oscCallback);
+#elif __MSP__
     mSerial.begin(57600);
-    mSerial.registerMSPCallback(mspCallback);
+    mSerial.registerCallback(mspCallback);
+#else
+    #error "NO CONTROLLER !!!"
+#endif
 
     LOG(F("---- BROBOT ---- \n"));
-
-#if !MOTOR_TEST
     Wire.begin();
     TWSR = 0;
     TWBR = ((16000000L / I2C_SPEED) - 16) / 2;
@@ -452,6 +624,8 @@ void setup()
     mMPU.setDLPFMode(MPU6050_DLPF_BW_10);       // 10,20,42,98,188  // Default factor for BROBOT:10
     mMPU.setRate(4);                            // 0=1khz 1=500hz, 2=333hz, 3=250hz 4=200hz
     mMPU.setSleepEnabled(false);
+
+#if !__MOTOR_TEST__
     delay(500);
 
     LOG(F("Initializing DMP...\n"));
@@ -491,6 +665,7 @@ void setup()
 #endif
 
     LOG(F("Steper motors initialization...\n"));
+
     // TIMER1 for motor step
     TCCR1A = 0;                                 // Timer1 normal mode 0, OCxA,B outputs disconnected
     TCCR1B = BV(CS11);                          // Prescaler=8, => 2Mhz
@@ -500,7 +675,7 @@ void setup()
     mDirs[MOT_2] = 0;
     TCNT1  = 0;
     TIMSK1 |= (BV(OCIE1A) | BV(OCIE1B));        // Enable Timer1 interrupt
-    ENABLE_MOTOR();
+    ENABLE_MOTORS();
 
     // Little motor vibration and servo move to indicate that robot is ready
     s16 speeds[2];
@@ -519,10 +694,7 @@ void setup()
     setMotorSpeed(speeds);
 
     LOG(F("Let's start...\n"));
-#if !MOTOR_TEST
     mMPU.resetFIFO();
-#endif
-
     mLastTS = millis() - 1;
     mIsShutdown = false;
 }
@@ -533,7 +705,7 @@ void setup()
 * test routines
 *****************************************************************************************
 */
-#if MOTOR_TEST
+#if __MOTOR_TEST__
 void testMotors(void)
 {
     static s16  motorSpeeds[2];
@@ -643,12 +815,15 @@ void loop()
 {
     float       fDelta;
 
-#if MOTOR_TEST
+#if __MOTOR_TEST__
     testMotors();
-    return;
-#endif
+#else
 
+#if __OSC__
+    mSerial.handleOSC();
+#elif __MSP__
     mSerial.handleMSP();
+#endif
     mCurTS = millis();
 
     // every 5sec
@@ -676,10 +851,12 @@ void loop()
 
     u16 nFifoCtr = mMPU.getFIFOCount();
     if (nFifoCtr >= 18) {
+        mCycleTime++;
         // If we have more than one packet we take the easy path: discard the buffer and wait for the next one
         if (nFifoCtr > 18) {
             LOG(F("FIFO RESET!!\n"));
             mMPU.resetFIFO();
+            mErrCtr++;
             return;
         }
         fDelta = (mCurTS - mLastTS);
@@ -706,7 +883,7 @@ void loop()
         mTargetAngle = constrain(mTargetAngle, -mMaxTargetAngle, mMaxTargetAngle); // limited output
         //LOG(F("AngleAdjusted:%f, EstSpeedFiltered:%f, TargetAngle:%f\n"), mAngleAdjusted, mEstSpeedFiltered, mTargetAngle);
 
-#if 1
+#if __SONAR__
         // check sonar sensor when normal condition
         if (-45 < mAngleAdjusted && mAngleAdjusted < 45) {
             s16 dist = mRobotAux.getDist(0);
@@ -751,7 +928,7 @@ void loop()
         // NOW we send the commands to the motors
         if (-76 < mAngleAdjusted && mAngleAdjusted < 76) { // Is robot ready (upright?)
             // NORMAL MODE
-            ENABLE_MOTOR();
+            ENABLE_MOTORS();
             setMotorSpeed(mMotors);
 
             // Normal condition?
@@ -767,7 +944,7 @@ void loop()
                 mThrI = KI_THROTTLE_RAISEUP;
             }
         } else {   // Robot not ready (flat)
-            DISABLE_MOTOR();
+            DISABLE_MOTORS();
             s16 motors[2] = { 0, 0 };
             setMotorSpeed(motors);
             mPIDErrSum = 0;  // Reset PID I term
@@ -787,5 +964,6 @@ void loop()
             }
         }
     }
+#endif
 }
 

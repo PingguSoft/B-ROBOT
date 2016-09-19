@@ -14,9 +14,10 @@
 
 #ifndef _SERIAL_PROTOCOL_H_
 #define _SERIAL_PROTOCOL_H_
-
-#include "Common.h"
 #include <stdarg.h>
+#include "common.h"
+#include "config.h"
+#include "utils.h"
 
 #define MAX_PACKET_SIZE 64
 
@@ -51,7 +52,8 @@ public:
     static void dumpHex(char *name, u8 *data, u16 cnt);
 
     u8   handleMSP(void);
-    void registerMSPCallback(s8 (*callback)(u8 cmd, u8 *data, u8 size, u8 *res));
+    u8   handleOSC(void);
+    void registerCallback(s8 (*callback)(u8 cmd, u8 *data, u8 size, u8 *res));
 
 private:
     typedef enum
@@ -79,6 +81,8 @@ private:
     void putMSPChar2TX(u8 data);
     void sendMSPResp(bool ok, u8 cmd, u8 *data, u8 size);
     void evalMSPCommand(u8 cmd, u8 *data, u8 size);
+
+    void evalOSCCommand(u8 cmd, u8 *data, u8 size);
 };
 
 #endif

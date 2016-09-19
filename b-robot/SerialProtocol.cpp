@@ -17,9 +17,37 @@
 #else
 #include "WProgram.h"
 #endif
-
 #include "SerialProtocol.h"
-#include "utils.h"
+
+#if defined(__AVR_ATmega328P__)
+#define UCSRB   UCSR0B
+#define UDR     UDR0
+#define UDRIE   UDRIE0
+#define RXEN    RXEN0
+#define TXEN    TXEN0
+#define RXCIE   RXCIE0
+#define UCSRA   UCSR0A
+#define U2X     U2X0
+#define UBRRL   UBRR0L
+#define UBRRH   UBRR0H
+#define UCSRC   UCSR0C
+#define RXC     RXC0
+#elif defined(__AVR_ATmega32U4__)
+#define UCSRB   UCSR1B
+#define UDR     UDR1
+#define UDRIE   UDRIE1
+#define RXEN    RXEN1
+#define TXEN    TXEN1
+#define RXCIE   RXCIE1
+#define UCSRA   UCSR1A
+#define U2X     U2X1
+#define UBRRL   UBRR1L
+#define UBRRH   UBRR1H
+#define UCSRC   UCSR1C
+#define RXC     RXC1
+#endif
+
+
 
 #define MAX_BUF_SIZE 128
 
@@ -79,7 +107,7 @@ static void putChar2TX(u8 data)
 
 static __inline void flushTX(void)
 {
-    UCSR0B |= BV(UDRIE0);
+    UCSRB |= BV(UDRIE);
 }
 
 static u8 sAvailable(struct ringBuf *buf)
@@ -90,7 +118,7 @@ static u8 sAvailable(struct ringBuf *buf)
 #if !__STD_SERIAL__
 ISR(USART_RX_vect)
 {
-    putChar(&mRxRingBuf, UDR0);
+    putChar(&mRxRingBuf, UDR);
 }
 
 ISR(USART_UDRE_vect)
@@ -99,7 +127,7 @@ ISR(USART_UDRE_vect)
 
     u8 tail = buf->tail;
     if (buf->head != tail) {
-        UDR0 = buf->buffer[tail];
+        UDR = buf->buffer[tail];
         if (++tail >= MAX_BUF_SIZE)
             tail = 0;
         buf->tail = tail;
@@ -107,7 +135,7 @@ ISR(USART_UDRE_vect)
 
     // disable transmitter UDRE interrupt
     if (tail == buf->head)
-        UCSR0B &= ~BV(UDRIE0);
+        UCSRB &= ~BV(UDRIE);
 }
 #endif
 
@@ -117,7 +145,7 @@ SerialProtocol::SerialProtocol()
 
 SerialProtocol::~SerialProtocol()
 {
-    UCSR0B &= ~(BV(RXEN0) | BV(TXEN0) | BV(RXCIE0) | BV(UDRIE0));
+    UCSRB &= ~(BV(RXEN) | BV(TXEN) | BV(RXCIE) | BV(UDRIE));
 }
 
 void SerialProtocol::begin(u32 baud, u8 config)
@@ -143,27 +171,27 @@ void SerialProtocol::begin(u32 baud, u8 config)
         } else if (100 * (F_CPU) < (8 * ((ubrr) + 1)) * (100 * (baud) - (baud) * (baud_tol))) {
             // Baud rate achieved is lower than allowed !!!
         }
-        UCSR0A |= BV(U2X0);
+        UCSRA |= BV(U2X);
     } else {
-        UCSR0A &= ~BV(U2X0);
+        UCSRA &= ~BV(U2X);
     }
 
-    UBRR0L = (ubrr & 0xff);
-    UBRR0H = (ubrr >> 8);
-	UCSR0C = config;
+    UBRRL = (ubrr & 0xff);
+    UBRRH = (ubrr >> 8);
+	UCSRC = config;
 
-    while (UCSR0A & BV(RXC0) )                      //flush receive buffer
-		u8 data = UDR0;
+    while (UCSRA & BV(RXC) )                      //flush receive buffer
+		u8 data = UDR;
 
 	//enable reception and RC complete interrupt
-	UCSR0B = BV(RXEN0) | BV(RXCIE0) | BV(TXEN0);    //rx enable and interrupt
+	UCSRB = BV(RXEN) | BV(RXCIE) | BV(TXEN);    //rx enable and interrupt
     sei();
 }
 
 void SerialProtocol::clearTX(void)
 {
     cli();
-    UCSR0B &= ~BV(UDRIE0);
+    UCSRB &= ~BV(UDRIE);
     memset(&mTxRingBuf, 0, sizeof(mTxRingBuf));
     sei();
 }
@@ -263,18 +291,18 @@ void SerialProtocol::dumpHex(char *name, u8 *data, u16 cnt)
     }
 }
 
+void SerialProtocol::registerCallback(s8 (*callback)(u8 cmd, u8 *data, u8 size, u8 *res))
+{
+    mState = STATE_IDLE;
+    mCallback = callback;
+}
 
 /*
 *****************************************************************************************
 * MSP
 *****************************************************************************************
 */
-void SerialProtocol::registerMSPCallback(s8 (*callback)(u8 cmd, u8 *data, u8 size, u8 *res))
-{
-    mState = STATE_IDLE;
-    mCallback = callback;
-}
-
+#if __MSP__
 void SerialProtocol::putMSPChar2TX(u8 data)
 {
     mCheckSumTX ^= data;
@@ -391,3 +419,92 @@ u8 SerialProtocol::handleMSP(void)
     }
     return ret;
 }
+#endif
+
+/*
+*****************************************************************************************
+* OSC
+*****************************************************************************************
+*/
+#if __OSC__
+void SerialProtocol::evalOSCCommand(u8 cmd, u8 *data, u8 size)
+{
+    u8  buf[22];
+    u16 *rc;
+
+    memset(&buf, 0, sizeof(buf));
+
+    switch (cmd) {
+        default:
+            if (mCallback) {
+                s8 ret = (*mCallback)(cmd, data, size, buf);
+                if (ret >= 0) {
+
+                }
+            }
+            break;
+    }
+}
+
+u8 SerialProtocol::handleOSC(void)
+{
+    u8 ret = 0;
+    u8 rxSize = available();
+
+    if (rxSize == 0)
+        return ret;
+
+    while (rxSize--) {
+        u8 ch = read();
+
+        switch (mState) {
+            case STATE_IDLE:
+                if (ch == '/') {
+                    mState = STATE_HEADER_START;
+                }
+                break;
+
+            case STATE_HEADER_START:
+                if ('0' <= ch && ch <= '9') {
+                    mState = STATE_HEADER_M;
+                    mCmd   = ch - '0';
+                } else {
+                    mState = STATE_IDLE;
+                }
+                break;
+
+            case STATE_HEADER_M:
+                mState = (ch == '/') ? STATE_HEADER_ARROW : STATE_IDLE;
+                break;
+
+            case STATE_HEADER_ARROW:
+                if (ch == 'f' || ch == 't' || ch == 'p' || ch == 'x') {
+                    if (ch == 'x') {
+                        mDataSize = 24 - 3;
+                    } else {
+                        mDataSize = 20 - 3;
+                    }
+                    mOffset   = 0;
+                    mState    = STATE_HEADER_CMD;
+                    mRxPacket[mOffset++] = ch;
+                } else {
+                    mState = STATE_IDLE;
+                    continue;
+                }
+                break;
+
+            case STATE_HEADER_CMD:
+                if (mOffset < mDataSize) {
+                    mRxPacket[mOffset++] = ch;
+                } else {
+                    ret = mCmd;
+                    evalOSCCommand(ret, mRxPacket, mDataSize);
+                    mState = STATE_IDLE;
+                    //rxSize = 0;             // no more than one command per cycle
+                }
+                break;
+        }
+    }
+    return ret;
+}
+#endif
