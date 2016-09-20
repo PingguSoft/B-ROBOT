@@ -8,6 +8,7 @@
 #include "utils.h"
 #include "SerialProtocol.h"
 #include "RobotAux.h"
+#include "esp8266.h"
 
 /*
 *****************************************************************************************
@@ -139,6 +140,9 @@ u8          mLastAuxBtn = 0;
 u8          mRaiseUp = 0;
 u8          mHeartBeat = 0;
 
+#if __OSC__
+ESP8266     mESP;
+#endif
 
 
 /*
@@ -366,10 +370,11 @@ s8 mspCallback(u8 cmd, u8 *data, u8 size, u8 *res)
             val = (*rc++ - 1000);
             mSteering = (val / 1000.0) - 0.5;
             mSteering = -mSteering;
-            if (mSteering > 0)
+            if (mSteering > 0) {
                 mSteering = (mSteering * mSteering + 0.5 * mSteering) * mMaxSteering;
-            else
+            } else {
                 mSteering = (-mSteering * mSteering + 0.5 * mSteering) * mMaxSteering;
+            }
 
             // pitch
             val = (*rc++ - 1000);
@@ -435,10 +440,10 @@ union
     float d;
 } u;
 
-    u.buf[0] = buf[0];
-    u.buf[1] = buf[1];
-    u.buf[2] = buf[2];
-    u.buf[3] = buf[3];
+    u.buf[0] = buf[3];
+    u.buf[1] = buf[2];
+    u.buf[2] = buf[1];
+    u.buf[3] = buf[0];
 
     return u.d;
 }
@@ -457,11 +462,12 @@ s8 oscPage1(u8 *data, u8 size, u8 *res)
                         break;
 
                     case '2':
-                        mSteering = getFloat(&data[13]);
-                        if (mSteering > 0)
+                        mSteering = getFloat(&data[13]) - 0.5;
+                        if (mSteering > 0) {
                             mSteering = (mSteering * mSteering + 0.5 * mSteering) * mMaxSteering;
-                        else
+                        } else {
                             mSteering = (-mSteering * mSteering + 0.5 * mSteering) * mMaxSteering;
+                        }
                         break;
                 }
             }
@@ -509,6 +515,7 @@ s8 oscPage2(u8 *data, u8 size, u8 *res)
 {
     s8  ret = -1;
 
+    DUMP("P2", data, size);
     switch (data[0]) {
         // fader
         case 'f':
@@ -600,10 +607,11 @@ void setup()
     mRobotAux.begin();
     mLastBatt = mRobotAux.getBattVolt();
 
-
 #if __OSC__
+    Serial.begin(115200);
     mSerial.begin(115200);
     mSerial.registerCallback(oscCallback);
+    mESP.begin(&mSerial);
 #elif __MSP__
     mSerial.begin(57600);
     mSerial.registerCallback(mspCallback);

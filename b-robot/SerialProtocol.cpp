@@ -48,7 +48,6 @@
 #endif
 
 
-
 #define MAX_BUF_SIZE 128
 
 struct ringBuf {
@@ -115,13 +114,36 @@ static u8 sAvailable(struct ringBuf *buf)
     return ((u8)(buf->head - buf->tail)) % MAX_BUF_SIZE;
 }
 
-#if !__STD_SERIAL__
+
+#if defined(__AVR_ATmega328P__) && !__STD_SERIAL__
 ISR(USART_RX_vect)
 {
     putChar(&mRxRingBuf, UDR);
 }
 
 ISR(USART_UDRE_vect)
+{
+    struct ringBuf *buf = &mTxRingBuf;
+
+    u8 tail = buf->tail;
+    if (buf->head != tail) {
+        UDR = buf->buffer[tail];
+        if (++tail >= MAX_BUF_SIZE)
+            tail = 0;
+        buf->tail = tail;
+    }
+
+    // disable transmitter UDRE interrupt
+    if (tail == buf->head)
+        UCSRB &= ~BV(UDRIE);
+}
+#elif defined(__AVR_ATmega32U4__)
+ISR(USART1_RX_vect)
+{
+    putChar(&mRxRingBuf, UDR);
+}
+
+ISR(USART1_UDRE_vect)
 {
     struct ringBuf *buf = &mTxRingBuf;
 
@@ -215,12 +237,31 @@ u8 SerialProtocol::read(void)
 
 u8 SerialProtocol::read(u8 *buf)
 {
-    u8 size = sAvailable(&mRxRingBuf);
+    return read(buf, 255);
+}
 
-    for (u8 i = 0; i < size; i++)
+u8 SerialProtocol::read(u8 *buf, u8 size)
+{
+    u8 rsize = min(sAvailable(&mRxRingBuf), size);
+
+    for (u8 i = 0; i < rsize; i++)
         *buf++ = getChar(&mRxRingBuf);
 
-    return size;
+    return rsize;
+}
+
+void SerialProtocol::write(const __FlashStringHelper *buf, u8 size)
+{
+    for (u8 i = 0; i < size; i++)
+        putChar2TX(pgm_read_byte((PGM_P)buf + i));
+    flushTX();
+}
+
+void SerialProtocol::write(char *buf, u8 size)
+{
+    for (u8 i = 0; i < size; i++)
+        putChar2TX(*(buf + i));
+    flushTX();
 }
 
 /*
@@ -406,13 +447,14 @@ u8 SerialProtocol::handleMSP(void)
                 if (mOffset < mDataSize) {
                     mCheckSum           ^= ch;
                     mRxPacket[mOffset++] = ch;
-                } else {
-                    if (mCheckSum == ch) {
-                        ret = mCmd;
-                        evalMSPCommand(ret, mRxPacket, mDataSize);
+                    if (mOffset == mDataSize) {
+                        if (mCheckSum == ch) {
+                            ret = mCmd;
+                            evalMSPCommand(ret, mRxPacket, mDataSize);
+                        }
+                        mState = STATE_IDLE;
+                        //rxSize = 0;             // no more than one command per cycle
                     }
-                    mState = STATE_IDLE;
-                    //rxSize = 0;             // no more than one command per cycle
                 }
                 break;
         }
@@ -496,11 +538,12 @@ u8 SerialProtocol::handleOSC(void)
             case STATE_HEADER_CMD:
                 if (mOffset < mDataSize) {
                     mRxPacket[mOffset++] = ch;
-                } else {
-                    ret = mCmd;
-                    evalOSCCommand(ret, mRxPacket, mDataSize);
-                    mState = STATE_IDLE;
-                    //rxSize = 0;             // no more than one command per cycle
+                    if (mOffset == mDataSize) {
+                        ret = mCmd;
+                        evalOSCCommand(ret, mRxPacket, mDataSize);
+                        mState = STATE_IDLE;
+                        //rxSize = 0;             // no more than one command per cycle
+                    }
                 }
                 break;
         }

@@ -21,8 +21,8 @@
 *****************************************************************************************
 */
 // controller
-#define __OSC__         1
-#define __MSP__         0
+#define __OSC__         0
+#define __MSP__         1
 
 // sonar
 #define __SONAR__       0
@@ -31,7 +31,7 @@
 #define __MOTOR_TEST__  0
 
 // debug
-#define __DEBUG__       1
+#define __DEBUG__       0
 
 
 #if __MOTOR_TEST__ && !__DEBUG__
@@ -123,7 +123,7 @@
 #define BIT_MOT_2_DIR           6
 
 // OTHERS
-#define PIN_LED                 22
+#define PIN_LED                 A4
 
 #define PIN_SONAR_TRIG          A5      // 19
 #define PIN_SONAR_ECHO_1        3

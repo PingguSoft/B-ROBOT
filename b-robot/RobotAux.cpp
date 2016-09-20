@@ -38,7 +38,7 @@ u8 RobotAux::getBattVolt(void)
     mVoltBuf[mVoltIdx++] = v;
     mVoltIdx %= VBAT_SMOOTH_LEVEL;
 
-    return map(mVoltSum / VBAT_SMOOTH_LEVEL, 0, 1023, 0, 130);
+    return map(mVoltSum / VBAT_SMOOTH_LEVEL, 0, 1023, 0, 198);
 }
 
 void RobotAux::initServo(void)

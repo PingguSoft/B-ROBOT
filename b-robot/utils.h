@@ -4,8 +4,6 @@
  the Free Software Foundation, either version 3 of the License, or
  (at your option) any later version.
 
- This program is derived from deviationTx project for Arduino.
-
  This program is distributed in the hope that it will be useful,
  but WITHOUT ANY WARRANTY; without even the implied warranty of
  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
@@ -22,7 +20,9 @@
 #include "SerialProtocol.h"
 
 // Bit vector from bit position
-#define BV(bit) (1 << (bit))
+#define BV(bit)     (1 << (bit))
+#define min(a,b)    ((a)<(b)?(a):(b))
+#define max(a,b)    ((a)>(b)?(a):(b))
 
 u32  rand32_r(u32 *seed, u8 update);
 u32  rand32();

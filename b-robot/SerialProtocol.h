@@ -46,6 +46,10 @@ public:
     static u8   available(void);
     static u8   read(void);
     static u8   read(u8 *buf);
+    static u8   read(u8 *buf, u8 size);
+    static void write(const __FlashStringHelper *buf, u8 size);
+    static void write(char *buf, u8 size);
+
 
     static void printf(char *fmt, ... );
     static void printf(const __FlashStringHelper *fmt, ... );
