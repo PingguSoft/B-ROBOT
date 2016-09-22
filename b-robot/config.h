@@ -124,6 +124,8 @@
 
 // ANALOG
 #define PIN_ANALOG_VOLT         6       // A6
+#define BATT_DIVIDER_R1         30      // 30K Ohm
+#define BATT_DIVIDER_R2         10      // 10K Ohm
 
 // wifi module - default firmware (1), tcp2serial firmware (0)
 #define __FEATURE_WIFI_DEFAULT__    0
@@ -174,6 +176,8 @@
 
 // ANALOG
 #define PIN_ANALOG_VOLT         0       // A0
+#define BATT_DIVIDER_R1         40      // 40K Ohm
+#define BATT_DIVIDER_R2         20      // 20K Ohm
 
 #define SERIAL_BPS              115200
 
@@ -226,6 +230,8 @@
 
 // ANALOG
 #define PIN_ANALOG_VOLT         0       // A0
+#define BATT_DIVIDER_R1         40      // 40K Ohm
+#define BATT_DIVIDER_R2         20      // 20K Ohm
 
 // wifi module - default firmware (1), tcp2serial firmware (0)
 #define __FEATURE_WIFI_DEFAULT__    1
@@ -236,9 +242,10 @@
 * COMMON SETTINGS
 *****************************************************************************************
 */
-
 #if __FEATURE_WIFI_DEFAULT__
 #define SERIAL_BPS              115200
 #else
 #define SERIAL_BPS              57600
+#endif
+
 #endif

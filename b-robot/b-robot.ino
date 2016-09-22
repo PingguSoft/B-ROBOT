@@ -91,9 +91,7 @@ u8          mFifoBufs[18];
 u32         mCurTS;
 u32         mLastTS;
 u32         mLastBattTS;
-#if __FEATURE_SONAR__
-u32         mLastSonarTS;
-#endif
+u32         mLastHeartTS;
 u16         mCycleTime = 0;
 u16         mErrCtr = 0;
 
@@ -852,17 +850,17 @@ void loop()
 
 
     // every 60ms
-    if (mCurTS - mLastSonarTS > 60) {
+    if (mCurTS - mLastHeartTS > 60) {
 #if __FEATURE_SONAR__
         s16 dist = mRobotAux.getDist(0);
         if (dist > 0) {
             LOG(F("%8ld DIST:%3d Cm\n"), micros(), dist);
         }
         mRobotAux.updateSonar();
-        mLastSonarTS = mCurTS;
 #endif
         mHeartBeat = !mHeartBeat;
         digitalWrite(PIN_LED, mHeartBeat);
+        mLastHeartTS = mCurTS;
     }
 
     if (mIsShutdown) {

@@ -30,6 +30,7 @@ u32          mPingTS;
 u8 RobotAux::getBattVolt(void)
 {
     u16 v;
+    u16 maxVolt;
 
     v = analogRead(PIN_ANALOG_VOLT);
 
@@ -38,7 +39,9 @@ u8 RobotAux::getBattVolt(void)
     mVoltBuf[mVoltIdx++] = v;
     mVoltIdx %= VBAT_SMOOTH_LEVEL;
 
-    return map(mVoltSum / VBAT_SMOOTH_LEVEL, 0, 1023, 0, 198);
+    // max volt = ((r1 + r2) / r2) * 5V
+    maxVolt = (BATT_DIVIDER_R1 / BATT_DIVIDER_R2) * 50 + 50;
+    return map(mVoltSum / VBAT_SMOOTH_LEVEL, 0, 1023, 0, maxVolt - 2);
 }
 
 void RobotAux::initServo(void)
