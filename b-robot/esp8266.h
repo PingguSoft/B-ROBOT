@@ -27,11 +27,12 @@ public:
     void begin(SerialProtocol *serial);
 
 private:
+    void startUDPClient(void);
+    void startTCPServer(void);
     u8 *wait(const __FlashStringHelper *resp, u8 *respBuf, u8 reqSize, u16 timeout);
     u8 *send(const __FlashStringHelper *cmd, const __FlashStringHelper *resp, u8 *respBuf, u8 reqSize, u16 timeout);
     u8 *send(u8 *cmd, const __FlashStringHelper *resp, u8 *respBuf, u8 reqSize, u16 timeout);
     SerialProtocol *mSerial;
-    u8 mIdx;
 };
 
 #endif

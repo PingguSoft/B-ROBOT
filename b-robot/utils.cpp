@@ -42,7 +42,7 @@ u32 rand32()
     return rand32_r(0, 0);
 }
 
-#if __DEBUG__
+#if __FEATURE_DEBUG__
 #if __STD_SERIAL__
 void LOG(char *fmt, ... )
 {

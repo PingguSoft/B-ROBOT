@@ -91,7 +91,9 @@ u8          mFifoBufs[18];
 u32         mCurTS;
 u32         mLastTS;
 u32         mLastBattTS;
+#if __FEATURE_SONAR__
 u32         mLastSonarTS;
+#endif
 u16         mCycleTime = 0;
 u16         mErrCtr = 0;
 
@@ -140,7 +142,7 @@ u8          mLastAuxBtn = 0;
 u8          mRaiseUp = 0;
 u8          mHeartBeat = 0;
 
-#if __OSC__
+#if __FEATURE_WIFI_DEFAULT__
 ESP8266     mESP;
 #endif
 
@@ -325,7 +327,7 @@ void setMotorSpeed(s16 *motors)
 }
 
 
-#if __MSP__
+#if (__FEATURE_CONTROLLER__ == __CON_MSP__)
 /*
 *****************************************************************************************
 * mspCallback
@@ -338,6 +340,8 @@ s8 mspCallback(u8 cmd, u8 *data, u8 size, u8 *res)
     u16 val;
     s8  ret = -1;
     s16 dist;
+
+    DUMP("MSP", data, size);
 
     switch (cmd) {
 
@@ -424,9 +428,9 @@ s8 mspCallback(u8 cmd, u8 *data, u8 size, u8 *res)
 
     return ret;
 }
-#endif
 
-#if __OSC__
+#elif (__FEATURE_CONTROLLER__ == __CON_OSC__)
+
 /*
 *****************************************************************************************
 * oscCallback
@@ -602,21 +606,24 @@ void setup()
     pinMode(PIN_MOT_2_STEP, OUTPUT);
     pinMode(PIN_LED, OUTPUT);
 
+#if __STD_SERIAL__
+    Serial.begin(SERIAL_BPS);
+#endif
+
     DISABLE_MOTORS();
     digitalWrite(PIN_LED, LOW);
     mRobotAux.begin();
     mLastBatt = mRobotAux.getBattVolt();
 
-#if __OSC__
-    Serial.begin(115200);
-    mSerial.begin(115200);
-    mSerial.registerCallback(oscCallback);
+    mSerial.begin(SERIAL_BPS);
+#if __FEATURE_WIFI_DEFAULT__
     mESP.begin(&mSerial);
-#elif __MSP__
-    mSerial.begin(57600);
+#endif
+
+#if (__FEATURE_CONTROLLER__ == __CON_MSP__)
     mSerial.registerCallback(mspCallback);
-#else
-    #error "NO CONTROLLER !!!"
+#elif (__FEATURE_CONTROLLER__ == __CON_OSC__)
+    mSerial.registerCallback(oscCallback);
 #endif
 
     LOG(F("---- BROBOT ---- \n"));
@@ -633,7 +640,7 @@ void setup()
     mMPU.setRate(4);                            // 0=1khz 1=500hz, 2=333hz, 3=250hz 4=200hz
     mMPU.setSleepEnabled(false);
 
-#if !__MOTOR_TEST__
+#if !__FEATURE_MOTOR_TEST__
     delay(500);
 
     LOG(F("Initializing DMP...\n"));
@@ -713,7 +720,7 @@ void setup()
 * test routines
 *****************************************************************************************
 */
-#if __MOTOR_TEST__
+#if __FEATURE_MOTOR_TEST__
 void testMotors(void)
 {
     static s16  motorSpeeds[2];
@@ -792,7 +799,7 @@ void testMotors(void)
     }
 
     mCurTS = millis();
-    if (mCurTS - mLastBattTS > 50) {
+    if (mCurTS - mLastBattTS > 60) {
         if (isBattMon) {
             mLastBatt = mRobotAux.getBattVolt();
             LOG(F("VOLT:%4d\n"), mLastBatt);
@@ -823,15 +830,17 @@ void loop()
 {
     float       fDelta;
 
-#if __MOTOR_TEST__
+#if __FEATURE_MOTOR_TEST__
     testMotors();
 #else
 
-#if __OSC__
-    mSerial.handleOSC();
-#elif __MSP__
+
+#if (__FEATURE_CONTROLLER__ == __CON_MSP__)
     mSerial.handleMSP();
+#elif (__FEATURE_CONTROLLER__ == __CON_OSC__)
+    mSerial.handleOSC();
 #endif
+
     mCurTS = millis();
 
     // every 5sec
@@ -841,16 +850,19 @@ void loop()
         mLastBattTS = mCurTS;
     }
 
-    // every 50ms
-    if (mCurTS - mLastSonarTS > 50) {
+
+    // every 60ms
+    if (mCurTS - mLastSonarTS > 60) {
+#if __FEATURE_SONAR__
         s16 dist = mRobotAux.getDist(0);
         if (dist > 0) {
             LOG(F("%8ld DIST:%3d Cm\n"), micros(), dist);
         }
         mRobotAux.updateSonar();
+        mLastSonarTS = mCurTS;
+#endif
         mHeartBeat = !mHeartBeat;
         digitalWrite(PIN_LED, mHeartBeat);
-        mLastSonarTS = mCurTS;
     }
 
     if (mIsShutdown) {
@@ -891,7 +903,7 @@ void loop()
         mTargetAngle = constrain(mTargetAngle, -mMaxTargetAngle, mMaxTargetAngle); // limited output
         //LOG(F("AngleAdjusted:%f, EstSpeedFiltered:%f, TargetAngle:%f\n"), mAngleAdjusted, mEstSpeedFiltered, mTargetAngle);
 
-#if __SONAR__
+#if __FEATURE_SONAR__
         // check sonar sensor when normal condition
         if (-45 < mAngleAdjusted && mAngleAdjusted < 45) {
             s16 dist = mRobotAux.getDist(0);

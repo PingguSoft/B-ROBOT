@@ -19,12 +19,9 @@ void ESP8266::begin(SerialProtocol *serial)
     u8  bufMac[2];
     u8  buf[50];
 
-    mIdx = 0;
     mSerial = serial;
 
-    delay(3000);
     mSerial->clearRX();
-
     mSerial->write(F("+++"), 3);
     delay(100);
 
@@ -39,15 +36,31 @@ void ESP8266::begin(SerialProtocol *serial)
     send(F("AT+CWQAP"), F("OK"), NULL, 0, 3000);
     send(F("AT+CWMODE=2"), F("OK"), NULL, 0, 3000);
 
-    strcpy_P((char*)buf, PSTR("AT+CWSAP=\"B-ROBOT_XX\",\"12345678\",5,3"));
+    strcpy_P((char*)buf, PSTR("AT+CWSAP=\"B-ROBOT_XX\",\"12345678\",5,0"));
     buf[18] = bufMac[0];
     buf[19] = bufMac[1];
     send(buf, F("OK"), NULL, 0, 3000);
 
+#if (__FEATURE_CONTROLLER__ == __CON_MSP__)
+    startTCPServer();
+#elif (__FEATURE_CONTROLLER__ == __CON_OSC__)
+    startUDPClient();
+#endif
+}
+
+void ESP8266::startUDPClient(void)
+{
     send(F("AT+CIPMUX=0"), F("OK"), NULL, 0, 3000);
     send(F("AT+CIPMODE=1"), F("OK"), NULL, 0, 3000);
     send(F("AT+CIPSTART=\"UDP\",\"192.168.4.2\",2223,2222,0"), F("OK"), NULL, 0, 3000);
     send(F("AT+CIPSEND"), F(">"), NULL, 0, 2000);
+}
+
+void ESP8266::startTCPServer(void)
+{
+    send(F("AT+CIPMUX=1"), F("OK"), NULL, 0, 3000);
+//    send(F("AT+CIPMODE=0"), F("OK"), NULL, 0, 3000);
+    send(F("AT+CIPSERVER=1,23"), F("OK"), NULL, 0, 3000);
 }
 
 u8 *ESP8266::wait(const __FlashStringHelper *resp, u8 *respBuf, u8 reqSize, u16 timeout)
@@ -100,7 +113,6 @@ u8 *ESP8266::wait(const __FlashStringHelper *resp, u8 *respBuf, u8 reqSize, u16 
 
 u8 *ESP8266::send(const __FlashStringHelper *cmd, const __FlashStringHelper *resp, u8 *respBuf, u8 reqSize, u16 timeout)
 {
-    mIdx++;
     LOG(cmd);
     mSerial->write(cmd, strlen_P((PGM_P)cmd));
     mSerial->write(F("\r\n"), 2);
@@ -112,7 +124,6 @@ u8 *ESP8266::send(const __FlashStringHelper *cmd, const __FlashStringHelper *res
 
 u8 *ESP8266::send(u8 *cmd, const __FlashStringHelper *resp, u8 *respBuf, u8 reqSize, u16 timeout)
 {
-    mIdx++;
     LOG((char*)cmd);
     mSerial->write(cmd, strlen(cmd));
     mSerial->write(F("\r\n"), 2);

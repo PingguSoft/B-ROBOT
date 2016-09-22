@@ -41,7 +41,7 @@ template <typename T> T PROGMEM_get(const T * sce)
 }
 
 
-#if __DEBUG__
+#if __FEATURE_DEBUG__
     #if __STD_SERIAL__
         void LOG(char *fmt, ... );
         void LOG(const __FlashStringHelper *fmt, ... );

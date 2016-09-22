@@ -343,7 +343,7 @@ void SerialProtocol::registerCallback(s8 (*callback)(u8 cmd, u8 *data, u8 size, 
 * MSP
 *****************************************************************************************
 */
-#if __MSP__
+#if (__FEATURE_CONTROLLER__ == __CON_MSP__)
 void SerialProtocol::putMSPChar2TX(u8 data)
 {
     mCheckSumTX ^= data;
@@ -352,6 +352,11 @@ void SerialProtocol::putMSPChar2TX(u8 data)
 
 void SerialProtocol::sendMSPResp(bool ok, u8 cmd, u8 *data, u8 size)
 {
+#if __FEATURE_WIFI_DEFAULT__
+    printf(F("AT+CIPSEND=0,%d\r\n"), 6 + size);
+    delay(2);
+#endif
+
     putMSPChar2TX('$');
     putMSPChar2TX('M');
     putMSPChar2TX((ok ? '>' : '!'));
@@ -447,28 +452,27 @@ u8 SerialProtocol::handleMSP(void)
                 if (mOffset < mDataSize) {
                     mCheckSum           ^= ch;
                     mRxPacket[mOffset++] = ch;
-                    if (mOffset == mDataSize) {
-                        if (mCheckSum == ch) {
-                            ret = mCmd;
-                            evalMSPCommand(ret, mRxPacket, mDataSize);
-                        }
-                        mState = STATE_IDLE;
-                        //rxSize = 0;             // no more than one command per cycle
+                } else {
+                    if (mCheckSum == ch) {
+                        ret = mCmd;
+                        evalMSPCommand(ret, mRxPacket, mDataSize);
                     }
+                    mState = STATE_IDLE;
+                    //rxSize = 0;             // no more than one command per cycle
                 }
                 break;
         }
     }
     return ret;
 }
-#endif
+
+#elif (__FEATURE_CONTROLLER__ == __CON_OSC__)
 
 /*
 *****************************************************************************************
 * OSC
 *****************************************************************************************
 */
-#if __OSC__
 void SerialProtocol::evalOSCCommand(u8 cmd, u8 *data, u8 size)
 {
     u8  buf[22];

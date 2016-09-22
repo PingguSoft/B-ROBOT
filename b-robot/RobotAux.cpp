@@ -20,7 +20,7 @@
 #define SONAR_PROGRESS      -2
 #define SONAR_ECHO_DETECT   -3
 
-#if __SONAR__
+#if __FEATURE_SONAR__
 s16          mDist[2];
 volatile s16 mTempDist[2];
 u32          mStartTS[2];
@@ -88,15 +88,16 @@ void RobotAux::begin(void)
     for (u8 i = 0; i < VBAT_SMOOTH_LEVEL; i++)
         getBattVolt();
 
-#if __SONAR__
+#if __FEATURE_SONAR__
     mDist[0] = SONAR_NO_DETECT;
     mDist[1] = SONAR_NO_DETECT;
 
     pinMode(PIN_SONAR_TRIG, OUTPUT);
+    pinMode(PIN_SONAR_ECHO_1, INPUT);
+    pinMode(PIN_SONAR_ECHO_2, INPUT);
     digitalWrite(PIN_SONAR_TRIG, LOW);
 
-    PCINT_ECHO_MASK |=  (BV(PIN_SONAR_ECHO_1) | BV(PIN_SONAR_ECHO_2));
-    PCINT_ECHO_DDR  &= ~(BV(PIN_SONAR_ECHO_1) | BV(PIN_SONAR_ECHO_2));
+    PCINT_ECHO_MASK |=  (BV(BIT_SONAR_ECHO_1) | BV(BIT_SONAR_ECHO_2));
     PCICR = PCICR | PCINT_ECHO_IR_BIT;
 #endif
 }
@@ -105,8 +106,8 @@ void RobotAux::updateSonar(void)
 {
     s16 dist;
 
-#if __SONAR__
-    if (micros() - mPingTS > 40000) {
+#if __FEATURE_SONAR__
+    if (micros() - mPingTS > 50000) {
         for (u8 i = 0; i < 2; i++) {
             if (mTempDist[i] < 0) {
                 dist = mDist[i];
@@ -116,27 +117,26 @@ void RobotAux::updateSonar(void)
             mDist[i] = dist; //(mDist[i] * SONAR_BARO_LPF_LC) + (mTempDist[i] * (1 - SONAR_BARO_LPF_LC));
             mTempDist[i] = SONAR_NO_DETECT;
         }
+        mPingTS = micros();
+        digitalWrite(PIN_SONAR_TRIG, LOW);
+        delayMicroseconds(2);
+        digitalWrite(PIN_SONAR_TRIG, HIGH);
+        delayMicroseconds(10);
+        digitalWrite(PIN_SONAR_TRIG, LOW);
     }
-
-    mPingTS = micros();
-    digitalWrite(PIN_SONAR_TRIG, LOW);
-    delayMicroseconds(2);
-    digitalWrite(PIN_SONAR_TRIG, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(PIN_SONAR_TRIG, LOW);
 #endif
 }
 
 s16 RobotAux::getDist(u8 idx)
 {
-#if __SONAR__
+#if __FEATURE_SONAR__
     return mDist[idx];
 #else
     return -1;
 #endif
 }
 
-#if __SONAR__
+#if __FEATURE_SONAR__
 ISR(PCINT_ECHO)
 {
     static u8 ucLastPin;
@@ -144,8 +144,8 @@ ISR(PCINT_ECHO)
     u8 pins = PCINT_ECHO_PINS;
     u8 mask = pins ^ ucLastPin;
 
-    if (mask & BV(PIN_SONAR_ECHO_1)) {
-        if (pins & BV(PIN_SONAR_ECHO_1)) {
+    if (mask & BV(BIT_SONAR_ECHO_1)) {
+        if (pins & BV(BIT_SONAR_ECHO_1)) {
             mStartTS[0]  = micros();
             mTempDist[0] = SONAR_ECHO_DETECT;
         } else {
@@ -153,8 +153,8 @@ ISR(PCINT_ECHO)
         }
     }
 
-    if (mask & BV(PIN_SONAR_ECHO_2)) {
-        if (pins & BV(PIN_SONAR_ECHO_2)) {
+    if (mask & BV(BIT_SONAR_ECHO_2)) {
+        if (pins & BV(BIT_SONAR_ECHO_2)) {
             mStartTS[1]  = micros();
             mTempDist[1] = SONAR_ECHO_DETECT;
         } else {
