@@ -58,6 +58,9 @@ void RobotAux::initServo(void)
     // initialize timer4 as Fast PWM
     TCCR4A = BV(COM4A1) | BV(COM4B1) | BV(PWM4A) | BV(PWM4B);
     TCCR4B = BV(CS43) | BV(CS41) | BV(CS40);                    // prescaler = 1024, 16MHz/1024/256 = 61Hz (16.3ms)
+    TCCR4D = 0;
+    TCCR4E = 0;
+    TC4H   = 0;
     TCNT4  = 0;
 #endif
 
@@ -79,6 +82,7 @@ void RobotAux::moveServo(u8 idx, u16 pwm)
 #if defined(__AVR_ATmega328P__)
         OCR2A = ocr;
 #elif defined(__AVR_ATmega32U4__)
+        TC4H  = 0;
         OCR4B = ocr;
 #endif
     }
